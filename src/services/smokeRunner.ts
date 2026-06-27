@@ -37,8 +37,20 @@ export class SmokeRunner {
 
     try {
       const health = await this.projectHealth.check(root);
-      checks.push(health.ready ? pass("project_health", "ready") : fail("project_health", health.warnings.join("; ")));
-      if (!health.ready) {
+      const blockingHealthIssues = [
+        !health.exists ? "project path does not exist" : undefined,
+        !health.isGitRepo ? "project is not a Git repository" : undefined,
+        !health.gitStatusClean ? "git status is not clean" : undefined,
+        !health.codexDirExists ? ".codex is missing" : undefined,
+        !health.tasksStateExists ? ".codex/state/tasks.json is missing" : undefined,
+        !health.gitignoreHasCodex ? ".gitignore does not contain .codex/" : undefined
+      ].filter((issue): issue is string => issue !== undefined);
+      checks.push(
+        blockingHealthIssues.length === 0
+          ? pass("project_health", health.warnings.length ? `ready with warnings: ${health.warnings.join("; ")}` : "ready")
+          : fail("project_health", blockingHealthIssues.join("; "))
+      );
+      if (blockingHealthIssues.length > 0) {
         return this.result(root, checks, taskId, reportPath);
       }
 
