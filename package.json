@@ -1,0 +1,41 @@
+{
+  "name": "chatgpt-codex-mcp",
+  "version": "0.1.0",
+  "description": "Local MCP task orchestrator for ChatGPT and Codex Desktop.",
+  "type": "module",
+  "bin": {
+    "chatgpt-codex-mcp": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "test": "vitest run",
+    "lint": "eslint ."
+  },
+  "keywords": [
+    "mcp",
+    "codex",
+    "task-orchestrator"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.5",
+    "execa": "^9.6.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.31.0",
+    "@types/node": "^24.1.0",
+    "eslint": "^9.31.0",
+    "globals": "^17.7.0",
+    "prettier": "^3.6.2",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.62.0",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

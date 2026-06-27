@@ -1,0 +1,162 @@
+# chatgpt-codex-mcp
+
+Локальный MVP MCP-сервера для связки ChatGPT и Codex Desktop через файловую очередь, Git и отчёты.
+
+ChatGPT в этой схеме выступает архитектором: ставит задачи, проверяет отчёты, смотрит diff и принимает решение. Codex Desktop остаётся исполнителем в локальном репозитории: читает markdown-задачи из `.codex/tasks`, делает изменения и пишет отчёты в `.codex/reports`.
+
+## Статус реализации
+
+MVP реализован:
+
+- TypeScript + Node.js + официальный MCP TypeScript SDK.
+- stdio MCP server.
+- Файловая очередь задач в `.codex`.
+- Хранение статусов в markdown и `.codex/state/tasks.json`.
+- Git diff inspection.
+- Безопасный запуск проверок с denylist и timeout.
+- Решения архитектора в `.codex/decisions`.
+- MCP tools, resources и prompts.
+- Vitest-тесты для ключевых сценариев.
+
+## Быстрый старт
+
+```bash
+npm install
+npm run build
+npm test
+```
+
+Если npm на Windows падает с `UNABLE_TO_VERIFY_LEAF_SIGNATURE`, запустите установку так:
+
+```powershell
+$env:NODE_OPTIONS="--use-system-ca"
+npm install
+```
+
+## Запуск MCP-сервера
+
+После сборки:
+
+```bash
+npm run build
+npm start
+```
+
+Для разработки:
+
+```bash
+npm run dev
+```
+
+Сервер использует stdio-транспорт, поэтому обычно его запускает MCP-клиент.
+
+## Подключение к MCP-клиенту
+
+Пример конфигурации MCP-клиента:
+
+```json
+{
+  "mcpServers": {
+    "chatgpt-codex-mcp": {
+      "command": "node",
+      "args": ["D:\\projects\\chatgpt-codex-mcp\\dist\\index.js"],
+      "env": {
+        "CODEX_MCP_DEFAULT_PROJECT": "D:\\projects\\some-project"
+      }
+    }
+  }
+}
+```
+
+`CODEX_MCP_DEFAULT_PROJECT` нужен только для статических resources. Tools принимают `projectPath` явно.
+
+## Рабочий цикл ChatGPT + Codex
+
+1. ChatGPT вызывает `create_task` и создаёт markdown-задачу.
+2. Codex Desktop читает `.codex/tasks/0001-task.md` в управляемом проекте.
+3. Codex выполняет задачу маленькими изменениями.
+4. Codex создаёт отчёт `.codex/reports/0001-report.md`.
+5. ChatGPT вызывает `read_report`, `inspect_diff` и `run_tests`.
+6. ChatGPT принимает задачу через `approve_task` или возвращает через `reject_task`.
+7. ChatGPT создаёт следующую задачу через `create_next_task`.
+
+MVP не запускает Codex Desktop автоматически. Связка намеренно построена через Git, файловую очередь и отчёты.
+
+## Структура `.codex`
+
+В каждом управляемом проекте сервер создаёт:
+
+```text
+.codex
+├── tasks
+├── reports
+├── decisions
+├── state
+└── archive
+```
+
+Задачи лежат в `.codex/tasks`, отчёты в `.codex/reports`, статусы в `.codex/state/tasks.json`, решения архитектора в `.codex/decisions`.
+
+## Tools
+
+- `create_task` создаёт новую задачу.
+- `get_task_status` возвращает одну задачу или весь список.
+- `read_report` читает markdown-отчёт Codex.
+- `inspect_diff` показывает git diff в режимах `summary`, `full`, `stat`, `names`.
+- `run_tests` запускает проверки из `projectPath`.
+- `approve_task` переводит задачу в `approved` и пишет решение.
+- `reject_task` переводит задачу в `rejected`, создаёт `0001-fix.md` и пишет решение.
+- `create_next_task` создаёт следующую задачу на основе предыдущей задачи и отчёта.
+
+## Resources
+
+- `project_state` возвращает задачи, git status, наличие отчётов и последние решения.
+- `task_queue` возвращает содержимое очереди задач.
+- `architect_log` возвращает журнал решений.
+
+Статические resources читают проект из `CODEX_MCP_DEFAULT_PROJECT`. Для произвольного пути есть шаблон `codex://project_state/{encodedProjectPath}`.
+
+## Prompts
+
+- `architect_review_prompt` помогает ChatGPT проверить результат Codex.
+- `next_task_prompt` помогает сформулировать следующую маленькую задачу.
+
+## Поддерживаемые проверки
+
+`run_tests` принимает список команд, например:
+
+```json
+{
+  "projectPath": "D:\\projects\\some-project",
+  "commands": ["npm run build", "npm test"]
+}
+```
+
+Команды выполняются из `projectPath`, получают timeout и проходят через простой denylist.
+
+## Ограничения безопасности MVP
+
+- `.env` не читается по умолчанию.
+- Секретоподобные значения в выводе редактируются.
+- Команды запускаются только из существующего `projectPath`.
+- Опасные команды блокируются по denylist: `rm -rf`, `del /s`, `format`, `shutdown`, вывод env/secrets, чтение `.env`, `powershell Invoke-WebRequest` без явного разрешения.
+- Длинный diff/output обрезается.
+- Полный diff для `.env`-like файлов не читается.
+- MCP не запускает Codex Desktop автоматически.
+- Audit-записи пишутся в `.codex/decisions`.
+
+## Разработка
+
+```bash
+npm run build
+npm test
+```
+
+Основные файлы:
+
+- `src/services/taskStore.ts` файловая очередь задач.
+- `src/services/gitService.ts` git status/diff.
+- `src/services/testRunner.ts` запуск проверок.
+- `src/utils/safeExec.ts` безопасное выполнение команд.
+- `src/mcp/tools.ts` MCP tools.
+- `src/mcp/server.ts` stdio server, resources и prompts.
