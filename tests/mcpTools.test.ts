@@ -12,6 +12,8 @@ describe("MCP tool registry", () => {
     expect(toolNames).toContain("project_health");
     expect(toolNames).toContain("list_tasks");
     expect(toolNames).toContain("archive_task");
+    expect(toolNames).toContain("doctor");
+    expect(toolNames).toContain("smoke_check");
   });
 
   it("builds the MCP server", () => {

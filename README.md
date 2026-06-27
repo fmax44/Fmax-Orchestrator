@@ -114,6 +114,63 @@ Bootstrap делает следующее:
 
 Используется tool `archive_task`. Архивировать можно только задачи со статусом `approved` или `rejected`.
 
+## MVP-4: doctor и smoke
+
+MVP-4 добавляет эксплуатационные проверки для ежедневной работы.
+
+Проверить сам Orchestrator:
+
+```powershell
+npm run doctor
+```
+
+Проверить Orchestrator и целевой проект:
+
+```powershell
+npm run doctor -- --project "D:\projects\some-project"
+```
+
+Получить машинно-читаемый JSON:
+
+```powershell
+npm run doctor -- --format json
+npm run doctor -- --project "D:\projects\some-project" --format json
+```
+
+Doctor возвращает один из статусов:
+
+- `READY` - можно работать;
+- `READY_WITH_WARNINGS` - можно работать после осознанной оценки предупреждений;
+- `NOT_READY` - сначала нужно исправить ошибки.
+
+Smoke-проверка проекта:
+
+```powershell
+npm run smoke -- --project "D:\projects\some-project"
+```
+
+JSON-вывод smoke:
+
+```powershell
+npm run smoke -- --project "D:\projects\some-project" --format json
+```
+
+Smoke создаёт служебную задачу и отчёт внутри `.codex`, проверяет чтение отчёта, diff и чистый Git status. Он не меняет бизнес-код и не должен менять tracked files проекта, если `.codex/` правильно исключён из Git.
+
+Когда использовать doctor:
+
+- перед началом рабочего дня;
+- перед подключением нового проекта;
+- если MCP-клиент ведёт себя неожиданно;
+- перед постановкой первой задачи.
+
+Когда использовать smoke:
+
+- после bootstrap нового проекта;
+- после обновления Orchestrator;
+- перед важной рабочей сессией;
+- если нужно проверить end-to-end flow без изменения продуктового кода.
+
 ## Подключение к MCP-клиенту
 
 Пример конфигурации MCP-клиента:
@@ -174,6 +231,8 @@ MVP не запускает Codex Desktop автоматически. Связк
 - `project_health` проверяет готовность проекта к Orchestrator workflow.
 - `list_tasks` показывает очередь задач, опционально фильтруя по статусу.
 - `archive_task` переносит завершённую задачу в `.codex/archive/<id>/`.
+- `doctor` запускает диагностику Orchestrator и, опционально, target project.
+- `smoke_check` запускает безопасную smoke-проверку target project.
 
 ## Resources
 
@@ -230,9 +289,12 @@ npm test
 - `src/mcp/server.ts` stdio server, resources и prompts.
 - `src/services/projectBootstrap.ts` подготовка проекта к workflow.
 - `src/services/projectHealth.ts` проверка готовности проекта.
+- `src/services/doctor.ts` эксплуатационная диагностика.
+- `src/services/smokeRunner.ts` smoke-проверка workflow.
 
 ## Документы
 
 - [Рабочий регламент ChatGPT + Codex + MCP Orchestrator](docs/WORKFLOW_RU.md)
 - [Architecture Decision Log](docs/ADR_RU.md)
+- [Эксплуатация MCP Orchestrator](docs/OPERATIONS_RU.md)
 - [Шаблон задачи для реального проекта](examples/real-project-task-template.md)

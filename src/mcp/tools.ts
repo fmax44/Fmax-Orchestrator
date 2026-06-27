@@ -6,20 +6,11 @@ import { TestRunner } from "../services/testRunner.js";
 import { ArchitectLog } from "../services/architectLog.js";
 import { ProjectHealthService } from "../services/projectHealth.js";
 import { taskStatuses, type TaskStatus } from "../domain/status.js";
+import { DoctorService } from "../services/doctor.js";
+import { SmokeRunner } from "../services/smokeRunner.js";
+import { toolNames } from "./toolNames.js";
 
-export const toolNames = [
-  "create_task",
-  "get_task_status",
-  "read_report",
-  "inspect_diff",
-  "run_tests",
-  "approve_task",
-  "reject_task",
-  "create_next_task",
-  "project_health",
-  "list_tasks",
-  "archive_task"
-] as const;
+export { toolNames };
 
 const projectPathSchema = z.string().min(1).describe("Absolute path to the managed local project.");
 const stringListSchema = z.array(z.string()).default([]);
@@ -46,6 +37,8 @@ export interface ToolHandlers {
   projectHealth(input: { projectPath: string }): Promise<unknown>;
   listTasks(input: { projectPath: string; status?: TaskStatus }): Promise<unknown>;
   archiveTask(input: { projectPath: string; taskId: string; reason: string }): Promise<unknown>;
+  doctor(input: { projectPath?: string; format?: "json" | "text" }): Promise<unknown>;
+  smokeCheck(input: { projectPath: string }): Promise<unknown>;
   createNextTask(input: {
     projectPath: string;
     previousTaskId: string;
@@ -66,7 +59,9 @@ export function createToolHandlers(
   gitService = new GitService(),
   testRunner = new TestRunner(),
   architectLog = new ArchitectLog(),
-  projectHealthService = new ProjectHealthService()
+  projectHealthService = new ProjectHealthService(),
+  doctorService = new DoctorService(),
+  smokeRunner = new SmokeRunner()
 ): ToolHandlers {
   return {
     async createTask(input) {
@@ -109,6 +104,12 @@ export function createToolHandlers(
     },
     async archiveTask(input) {
       return { task: await taskStore.archiveTask(input.projectPath, input.taskId, input.reason) };
+    },
+    async doctor(input) {
+      return doctorService.run(input.projectPath);
+    },
+    async smokeCheck(input) {
+      return smokeRunner.run(input.projectPath);
     },
     async createNextTask(input) {
       const task = await taskStore.createNextTask(input.projectPath, input.previousTaskId, input);
@@ -295,6 +296,31 @@ export function registerTools(server: McpServer, handlers = createToolHandlers()
       }
     },
     async (args) => jsonResult(await handlers.archiveTask(args))
+  );
+
+  server.registerTool(
+    "doctor",
+    {
+      title: "Doctor",
+      description: "Run readiness diagnostics for the Orchestrator and optionally a target project.",
+      inputSchema: {
+        projectPath: z.string().optional(),
+        format: z.enum(["json", "text"]).default("json")
+      }
+    },
+    async (args) => jsonResult(await handlers.doctor(args))
+  );
+
+  server.registerTool(
+    "smoke_check",
+    {
+      title: "Smoke Check",
+      description: "Run a safe end-to-end smoke check in a target project without changing tracked business files.",
+      inputSchema: {
+        projectPath: projectPathSchema
+      }
+    },
+    async (args) => jsonResult(await handlers.smokeCheck(args))
   );
 }
 
