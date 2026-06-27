@@ -9,6 +9,9 @@ describe("MCP tool registry", () => {
   it("declares the MVP tool names", () => {
     expect(toolNames).toContain("create_task");
     expect(toolNames).toContain("create_next_task");
+    expect(toolNames).toContain("project_health");
+    expect(toolNames).toContain("list_tasks");
+    expect(toolNames).toContain("archive_task");
   });
 
   it("builds the MCP server", () => {

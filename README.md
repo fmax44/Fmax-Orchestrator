@@ -17,6 +17,8 @@ MVP реализован:
 - Решения архитектора в `.codex/decisions`.
 - MCP tools, resources и prompts.
 - Vitest-тесты для ключевых сценариев.
+- MVP-3 tools для реального использования: `project_health`, `list_tasks`, `archive_task`.
+- Bootstrap-команда для подготовки новых проектов.
 
 ## Быстрый старт
 
@@ -49,6 +51,68 @@ npm run dev
 ```
 
 Сервер использует stdio-транспорт, поэтому обычно его запускает MCP-клиент.
+
+## MVP-3: подготовка рабочего проекта
+
+Перед использованием Orchestrator в реальном проекте проект должен быть Git-репозиторием.
+
+Подготовить проект:
+
+```powershell
+npm run bootstrap -- --project "D:\projects\some-project"
+```
+
+Bootstrap делает следующее:
+
+- проверяет, что папка проекта существует;
+- проверяет, что проект является Git-репозиторием;
+- создаёт `.codex/tasks`, `.codex/reports`, `.codex/decisions`, `.codex/state`, `.codex/archive`;
+- создаёт `.codex/state/tasks.json`, если его нет;
+- создаёт `.codex/README.md`;
+- добавляет `.codex/` в `.gitignore`, если строки ещё нет;
+- не удаляет существующие задачи и отчёты.
+
+Проверить готовность проекта можно через MCP tool `project_health`.
+
+Пример результата готового проекта:
+
+```json
+{
+  "exists": true,
+  "isGitRepo": true,
+  "gitStatusClean": true,
+  "codexDirExists": true,
+  "tasksStateExists": true,
+  "gitignoreHasCodex": true,
+  "packageManager": "npm",
+  "availableChecks": ["npm run build", "npm test", "npm run lint"],
+  "warnings": [],
+  "ready": true
+}
+```
+
+Посмотреть задачи:
+
+```json
+{
+  "projectPath": "D:\\projects\\some-project",
+  "status": "pending"
+}
+```
+
+Используется tool `list_tasks`. `status` необязателен.
+
+Архивировать завершённую задачу:
+
+```json
+{
+  "projectPath": "D:\\projects\\some-project",
+  "taskId": "0001",
+  "reason": "Task completed and committed"
+}
+```
+
+Используется tool `archive_task`. Архивировать можно только задачи со статусом `approved` или `rejected`.
 
 ## Подключение к MCP-клиенту
 
@@ -107,6 +171,9 @@ MVP не запускает Codex Desktop автоматически. Связк
 - `approve_task` переводит задачу в `approved` и пишет решение.
 - `reject_task` переводит задачу в `rejected`, создаёт `0001-fix.md` и пишет решение.
 - `create_next_task` создаёт следующую задачу на основе предыдущей задачи и отчёта.
+- `project_health` проверяет готовность проекта к Orchestrator workflow.
+- `list_tasks` показывает очередь задач, опционально фильтруя по статусу.
+- `archive_task` переносит завершённую задачу в `.codex/archive/<id>/`.
 
 ## Resources
 
@@ -161,3 +228,11 @@ npm test
 - `src/utils/safeExec.ts` безопасное выполнение команд.
 - `src/mcp/tools.ts` MCP tools.
 - `src/mcp/server.ts` stdio server, resources и prompts.
+- `src/services/projectBootstrap.ts` подготовка проекта к workflow.
+- `src/services/projectHealth.ts` проверка готовности проекта.
+
+## Документы
+
+- [Рабочий регламент ChatGPT + Codex + MCP Orchestrator](docs/WORKFLOW_RU.md)
+- [Architecture Decision Log](docs/ADR_RU.md)
+- [Шаблон задачи для реального проекта](examples/real-project-task-template.md)

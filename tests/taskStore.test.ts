@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { TaskStore } from "../src/services/taskStore.js";
@@ -52,6 +52,34 @@ describe("TaskStore", () => {
     await store.rejectTask(projectPath, "0001", "Needs changes.", ["Fix tests"]);
     expect((await store.getTask(projectPath, "0001")).status).toBe("rejected");
     await expect(readFile(path.join(projectPath, ".codex/tasks/0001-fix.md"), "utf8")).resolves.toContain("Fix tests");
+  });
+
+  it("lists tasks and archives approved tasks", async () => {
+    const projectPath = await tempProject();
+    const store = new TaskStore();
+    await store.createTask(projectPath, taskInput("Archive me"));
+    await writeFile(path.join(projectPath, ".codex/reports/0001-report.md"), "# Report for Task 0001\n", "utf8");
+    await store.approveTask(projectPath, "0001", "Accepted.");
+
+    await expect(store.listTasks(projectPath, "approved")).resolves.toHaveLength(1);
+    const archived = await store.archiveTask(projectPath, "0001", "Task completed and committed.");
+
+    expect(archived.status).toBe("archived");
+    expect(archived.taskPath).toBe(".codex/archive/0001/0001-task.md");
+    await expect(readFile(path.join(projectPath, ".codex/archive/0001/0001-task.md"), "utf8")).resolves.toContain("archived");
+    await expect(readFile(path.join(projectPath, ".codex/archive/0001/0001-report.md"), "utf8")).resolves.toContain("Report");
+    await expect(readFile(path.join(projectPath, ".codex/decisions/0001-archive.md"), "utf8")).resolves.toContain(
+      "Task completed and committed."
+    );
+  });
+
+  it("does not archive pending tasks", async () => {
+    const projectPath = await tempProject();
+    const store = new TaskStore();
+    await store.createTask(projectPath, taskInput("Still pending"));
+
+    await expect(store.archiveTask(projectPath, "0001", "Too early.")).rejects.toThrow("Only approved or rejected tasks");
+    await expect(stat(path.join(projectPath, ".codex/tasks/0001-task.md"))).resolves.toBeDefined();
   });
 });
 

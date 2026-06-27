@@ -4,6 +4,8 @@ import { TaskStore } from "../services/taskStore.js";
 import { GitService, type DiffMode } from "../services/gitService.js";
 import { TestRunner } from "../services/testRunner.js";
 import { ArchitectLog } from "../services/architectLog.js";
+import { ProjectHealthService } from "../services/projectHealth.js";
+import { taskStatuses, type TaskStatus } from "../domain/status.js";
 
 export const toolNames = [
   "create_task",
@@ -13,7 +15,10 @@ export const toolNames = [
   "run_tests",
   "approve_task",
   "reject_task",
-  "create_next_task"
+  "create_next_task",
+  "project_health",
+  "list_tasks",
+  "archive_task"
 ] as const;
 
 const projectPathSchema = z.string().min(1).describe("Absolute path to the managed local project.");
@@ -38,6 +43,9 @@ export interface ToolHandlers {
   runTests(input: { projectPath: string; commands: string[]; timeoutMs?: number }): Promise<unknown>;
   approveTask(input: { projectPath: string; taskId: string; decision: string }): Promise<unknown>;
   rejectTask(input: { projectPath: string; taskId: string; reason: string; requiredFixes: string[] }): Promise<unknown>;
+  projectHealth(input: { projectPath: string }): Promise<unknown>;
+  listTasks(input: { projectPath: string; status?: TaskStatus }): Promise<unknown>;
+  archiveTask(input: { projectPath: string; taskId: string; reason: string }): Promise<unknown>;
   createNextTask(input: {
     projectPath: string;
     previousTaskId: string;
@@ -57,7 +65,8 @@ export function createToolHandlers(
   taskStore = new TaskStore(),
   gitService = new GitService(),
   testRunner = new TestRunner(),
-  architectLog = new ArchitectLog()
+  architectLog = new ArchitectLog(),
+  projectHealthService = new ProjectHealthService()
 ): ToolHandlers {
   return {
     async createTask(input) {
@@ -89,6 +98,17 @@ export function createToolHandlers(
     },
     async rejectTask(input) {
       return { task: await taskStore.rejectTask(input.projectPath, input.taskId, input.reason, input.requiredFixes) };
+    },
+    async projectHealth(input) {
+      await logOperation(architectLog, input.projectPath, "project-health", undefined, "Read project health.");
+      return projectHealthService.check(input.projectPath);
+    },
+    async listTasks(input) {
+      await logOperation(architectLog, input.projectPath, "list-tasks", undefined, `List tasks${input.status ? ` with status ${input.status}` : ""}.`);
+      return { tasks: await taskStore.listTasks(input.projectPath, input.status) };
+    },
+    async archiveTask(input) {
+      return { task: await taskStore.archiveTask(input.projectPath, input.taskId, input.reason) };
     },
     async createNextTask(input) {
       const task = await taskStore.createNextTask(input.projectPath, input.previousTaskId, input);
@@ -236,6 +256,45 @@ export function registerTools(server: McpServer, handlers = createToolHandlers()
       }
     },
     async (args) => jsonResult(await handlers.createNextTask(args))
+  );
+
+  server.registerTool(
+    "project_health",
+    {
+      title: "Project Health",
+      description: "Check whether a project is ready for ChatGPT + Codex Orchestrator workflows.",
+      inputSchema: {
+        projectPath: projectPathSchema
+      }
+    },
+    async (args) => jsonResult(await handlers.projectHealth(args))
+  );
+
+  server.registerTool(
+    "list_tasks",
+    {
+      title: "List Tasks",
+      description: "List tasks in the .codex queue, optionally filtered by status.",
+      inputSchema: {
+        projectPath: projectPathSchema,
+        status: z.enum(taskStatuses).optional()
+      }
+    },
+    async (args) => jsonResult(await handlers.listTasks(args))
+  );
+
+  server.registerTool(
+    "archive_task",
+    {
+      title: "Archive Task",
+      description: "Archive an approved or rejected task and move task/report/fix files into .codex/archive.",
+      inputSchema: {
+        projectPath: projectPathSchema,
+        taskId: z.string().min(1),
+        reason: z.string().min(1)
+      }
+    },
+    async (args) => jsonResult(await handlers.archiveTask(args))
   );
 }
 

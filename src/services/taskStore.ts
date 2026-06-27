@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { CreateTaskData, TaskRecord, TaskState } from "../domain/task.js";
 import type { TaskReport } from "../domain/report.js";
@@ -93,6 +93,11 @@ export class TaskStore {
     return task;
   }
 
+  async listTasks(projectPath: string, status?: TaskStatus): Promise<TaskRecord[]> {
+    const state = await this.readState(projectPath);
+    return status ? state.tasks.filter((task) => task.status === status) : state.tasks;
+  }
+
   async updateStatus(projectPath: string, taskId: string, status: TaskStatus): Promise<TaskRecord> {
     const paths = await ensureCodexStructure(projectPath);
     const state = await this.readState(projectPath);
@@ -171,6 +176,53 @@ export class TaskStore {
     });
 
     return task;
+  }
+
+  async archiveTask(projectPath: string, taskId: string, reason: string): Promise<TaskRecord> {
+    const paths = await ensureCodexStructure(projectPath);
+    const state = await this.readState(projectPath);
+    const index = state.tasks.findIndex((task) => task.id === taskId);
+
+    if (index === -1) {
+      throw new Error(`Task not found: ${taskId}`);
+    }
+
+    const current = state.tasks[index];
+
+    if (current.status !== "approved" && current.status !== "rejected") {
+      throw new Error(`Only approved or rejected tasks can be archived. Task ${taskId} is ${current.status}.`);
+    }
+
+    const archiveDir = path.join(paths.archiveDir, taskId);
+    await mkdir(archiveDir, { recursive: true });
+    const taskPath = await moveIfExists(paths.root, current.taskPath, archiveDir);
+    const reportPath = await moveIfExists(paths.root, current.reportPath, archiveDir);
+    await moveIfExists(paths.root, `.codex/tasks/${taskId}-fix.md`, archiveDir);
+
+    const updated: TaskRecord = {
+      ...current,
+      status: "archived",
+      taskPath: taskPath ?? current.taskPath,
+      reportPath: reportPath ?? current.reportPath,
+      updatedAt: new Date().toISOString()
+    };
+
+    if (taskPath) {
+      const markdown = await readFile(ensureRelativeInsideProject(paths.root, taskPath), "utf8");
+      await writeFile(ensureRelativeInsideProject(paths.root, taskPath), replaceMarkdownSection(markdown, "Status", "archived"), "utf8");
+    }
+
+    await this.writeState(projectPath, {
+      tasks: state.tasks.map((task, taskIndex) => (taskIndex === index ? updated : task))
+    });
+    await this.architectLog.record(projectPath, {
+      taskId,
+      type: "archive",
+      title: `Task ${taskId} archived`,
+      body: reason
+    });
+
+    return updated;
   }
 
   private async writeState(projectPath: string, state: TaskState): Promise<void> {
@@ -257,4 +309,19 @@ export class TaskStore {
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error;
+}
+
+async function moveIfExists(projectPath: string, relativePath: string, archiveDir: string): Promise<string | undefined> {
+  const source = ensureRelativeInsideProject(projectPath, relativePath);
+  const exists = await stat(source)
+    .then(() => true)
+    .catch(() => false);
+
+  if (!exists) {
+    return undefined;
+  }
+
+  const destination = path.join(archiveDir, path.basename(relativePath));
+  await rename(source, destination);
+  return toProjectRelative(projectPath, destination);
 }
