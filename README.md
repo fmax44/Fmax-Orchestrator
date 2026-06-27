@@ -142,6 +142,7 @@ MVP не запускает Codex Desktop автоматически. Связк
 - Опасные команды блокируются по denylist: `rm -rf`, `del /s`, `format`, `shutdown`, вывод env/secrets, чтение `.env`, `powershell Invoke-WebRequest` без явного разрешения.
 - Длинный diff/output обрезается.
 - Полный diff для `.env`-like файлов не читается.
+- Git-репозиторий должен быть инициализирован до использования `inspect_diff`.
 - MCP не запускает Codex Desktop автоматически.
 - Audit-записи пишутся в `.codex/decisions`.
 
