@@ -1,5 +1,41 @@
 # Architecture Decision Log
 
+## ADR-008: Почему smoke должен иметь ephemeral mode
+
+### Решение
+
+Добавить `smoke --ephemeral` и использовать его как рекомендуемый режим ежедневных smoke-проверок.
+
+### Причина
+
+Legacy smoke создаёт обычную задачу, расходует нормальные task IDs и может засорять рабочую очередь. Для эксплуатационной проверки это лишний шум: smoke должен проверять инфраструктуру, но не конкурировать с реальными задачами.
+
+### Последствия
+
+Ephemeral smoke пишет данные в отдельный namespace `.codex/smoke/tasks`, `.codex/smoke/reports` и `.codex/smoke/state`. Обычные `.codex/state/tasks.json` и `.codex/tasks` остаются неизменными, а `git status --short` остаётся clean, если `.codex/` исключён из Git.
+
+### Ограничения
+
+Legacy smoke сохраняется для обратной совместимости. Он по-прежнему может расходовать обычные task IDs, поэтому для ежедневной работы нужно явно рекомендовать `--ephemeral`.
+
+## ADR-009: Почему docker compose config output не сохраняется по умолчанию
+
+### Решение
+
+Docker Compose profile не выполняет `docker compose config` по умолчанию. Команда выполняется только при явном `--allow-compose-config-output`, но полный stdout/stderr всё равно не сохраняется в отчёты.
+
+### Причина
+
+`docker compose config` может раскрывать resolved env values из `.env` и окружения. Такие значения не должны попадать в отчёты, markdown-файлы, MCP JSON или commit history.
+
+### Последствия
+
+Безопасный профиль проверяет наличие compose-файла, доступность `docker compose version` и выполнение `docker compose ps`. Если `docker compose config` разрешён явно, сохраняются только pass/fail, exit code и предупреждение о чувствительности вывода.
+
+### Ограничения
+
+Этот режим не заменяет полный ручной аудит Docker Compose. Он нужен как безопасная эксплуатационная проверка перед работой Orchestrator в реальном проекте.
+
 ## ADR-001: Использовать файловую очередь задач
 
 ### Решение

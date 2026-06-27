@@ -1,4 +1,5 @@
 import { formatSmokeText, SmokeRunner } from "../services/smokeRunner.js";
+import type { CheckProfile } from "../services/dockerComposeProfile.js";
 
 const args = parseArgs(process.argv.slice(2));
 
@@ -6,7 +7,11 @@ if (!args.project) {
   console.error('Usage: npm run smoke -- --project "D:\\projects\\some-project"');
   process.exitCode = 1;
 } else {
-  const result = await new SmokeRunner().run(args.project);
+  const result = await new SmokeRunner().run(args.project, {
+    ephemeral: args.ephemeral,
+    profile: args.profile,
+    allowComposeConfigOutput: args.allowComposeConfigOutput
+  });
 
   if (args.format === "json") {
     console.log(JSON.stringify(result, null, 2));
@@ -19,10 +24,13 @@ if (!args.project) {
   }
 }
 
-function parseArgs(args: string[]): { project?: string; format: "text" | "json" } {
+function parseArgs(args: string[]): { project?: string; format: "text" | "json"; ephemeral: boolean; profile: CheckProfile; allowComposeConfigOutput: boolean } {
   return {
     project: readValue(args, "--project") ?? readValue(args, "-p"),
-    format: readValue(args, "--format") === "json" ? "json" : "text"
+    format: readValue(args, "--format") === "json" ? "json" : "text",
+    ephemeral: args.includes("--ephemeral"),
+    profile: readValue(args, "--profile") === "docker-compose" ? "docker-compose" : "default",
+    allowComposeConfigOutput: args.includes("--allow-compose-config-output")
   };
 }
 

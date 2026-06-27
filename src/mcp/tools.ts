@@ -8,12 +8,14 @@ import { ProjectHealthService } from "../services/projectHealth.js";
 import { taskStatuses, type TaskStatus } from "../domain/status.js";
 import { DoctorService } from "../services/doctor.js";
 import { SmokeRunner } from "../services/smokeRunner.js";
+import type { CheckProfile } from "../services/dockerComposeProfile.js";
 import { toolNames } from "./toolNames.js";
 
 export { toolNames };
 
 const projectPathSchema = z.string().min(1).describe("Absolute path to the managed local project.");
 const stringListSchema = z.array(z.string()).default([]);
+const profileSchema = z.enum(["default", "docker-compose"]).default("default");
 
 export interface ToolHandlers {
   createTask(input: {
@@ -37,8 +39,8 @@ export interface ToolHandlers {
   projectHealth(input: { projectPath: string }): Promise<unknown>;
   listTasks(input: { projectPath: string; status?: TaskStatus }): Promise<unknown>;
   archiveTask(input: { projectPath: string; taskId: string; reason: string }): Promise<unknown>;
-  doctor(input: { projectPath?: string; format?: "json" | "text" }): Promise<unknown>;
-  smokeCheck(input: { projectPath: string }): Promise<unknown>;
+  doctor(input: { projectPath?: string; format?: "json" | "text"; profile?: CheckProfile; allowComposeConfigOutput?: boolean }): Promise<unknown>;
+  smokeCheck(input: { projectPath: string; profile?: CheckProfile; ephemeral?: boolean; allowComposeConfigOutput?: boolean }): Promise<unknown>;
   createNextTask(input: {
     projectPath: string;
     previousTaskId: string;
@@ -106,10 +108,18 @@ export function createToolHandlers(
       return { task: await taskStore.archiveTask(input.projectPath, input.taskId, input.reason) };
     },
     async doctor(input) {
-      return doctorService.run(input.projectPath);
+      return doctorService.run({
+        projectPath: input.projectPath,
+        profile: input.profile,
+        allowComposeConfigOutput: input.allowComposeConfigOutput
+      });
     },
     async smokeCheck(input) {
-      return smokeRunner.run(input.projectPath);
+      return smokeRunner.run(input.projectPath, {
+        profile: input.profile,
+        ephemeral: input.ephemeral,
+        allowComposeConfigOutput: input.allowComposeConfigOutput
+      });
     },
     async createNextTask(input) {
       const task = await taskStore.createNextTask(input.projectPath, input.previousTaskId, input);
@@ -305,7 +315,9 @@ export function registerTools(server: McpServer, handlers = createToolHandlers()
       description: "Run readiness diagnostics for the Orchestrator and optionally a target project.",
       inputSchema: {
         projectPath: z.string().optional(),
-        format: z.enum(["json", "text"]).default("json")
+        format: z.enum(["json", "text"]).default("json"),
+        profile: profileSchema,
+        allowComposeConfigOutput: z.boolean().default(false)
       }
     },
     async (args) => jsonResult(await handlers.doctor(args))
@@ -317,7 +329,10 @@ export function registerTools(server: McpServer, handlers = createToolHandlers()
       title: "Smoke Check",
       description: "Run a safe end-to-end smoke check in a target project without changing tracked business files.",
       inputSchema: {
-        projectPath: projectPathSchema
+        projectPath: projectPathSchema,
+        profile: profileSchema,
+        ephemeral: z.boolean().default(false),
+        allowComposeConfigOutput: z.boolean().default(false)
       }
     },
     async (args) => jsonResult(await handlers.smokeCheck(args))

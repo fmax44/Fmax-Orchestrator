@@ -1,7 +1,12 @@
 import { DoctorService, formatDoctorText } from "../services/doctor.js";
+import type { CheckProfile } from "../services/dockerComposeProfile.js";
 
 const args = parseArgs(process.argv.slice(2));
-const result = await new DoctorService().run(args.project);
+const result = await new DoctorService().run({
+  projectPath: args.project,
+  profile: args.profile,
+  allowComposeConfigOutput: args.allowComposeConfigOutput
+});
 
 if (args.format === "json") {
   console.log(JSON.stringify(result, null, 2));
@@ -13,10 +18,12 @@ if (result.result === "NOT_READY") {
   process.exitCode = 1;
 }
 
-function parseArgs(args: string[]): { project?: string; format: "text" | "json" } {
+function parseArgs(args: string[]): { project?: string; format: "text" | "json"; profile: CheckProfile; allowComposeConfigOutput: boolean } {
   return {
     project: readValue(args, "--project") ?? readValue(args, "-p"),
-    format: readValue(args, "--format") === "json" ? "json" : "text"
+    format: readValue(args, "--format") === "json" ? "json" : "text",
+    profile: readValue(args, "--profile") === "docker-compose" ? "docker-compose" : "default",
+    allowComposeConfigOutput: args.includes("--allow-compose-config-output")
   };
 }
 

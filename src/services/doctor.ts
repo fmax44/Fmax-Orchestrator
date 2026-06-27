@@ -3,6 +3,7 @@ import path from "node:path";
 import { toolNames } from "../mcp/toolNames.js";
 import { safeExec } from "../utils/safeExec.js";
 import { ProjectHealthService } from "./projectHealth.js";
+import { runDockerComposeProfile, type CheckProfile } from "./dockerComposeProfile.js";
 
 export type DiagnosticStatus = "pass" | "warn" | "fail";
 export type DoctorResultStatus = "READY" | "READY_WITH_WARNINGS" | "NOT_READY";
@@ -19,10 +20,24 @@ export interface DiagnosticSection {
 
 export interface DoctorResult {
   result: DoctorResultStatus;
+  profile: CheckProfile;
+  allowComposeConfigOutput: boolean;
   orchestrator: DiagnosticSection;
   targetProject?: DiagnosticSection & { projectPath: string };
   warnings: string[];
   errors: string[];
+}
+
+export interface DoctorRunOptions {
+  projectPath?: string;
+  profile?: CheckProfile;
+  allowComposeConfigOutput?: boolean;
+}
+
+interface NormalizedDoctorRunOptions {
+  projectPath?: string;
+  profile: CheckProfile;
+  allowComposeConfigOutput: boolean;
 }
 
 const requiredToolNames = [
@@ -47,15 +62,18 @@ export class DoctorService {
     private readonly projectHealth = new ProjectHealthService()
   ) {}
 
-  async run(projectPath?: string): Promise<DoctorResult> {
+  async run(projectPathOrOptions?: string | DoctorRunOptions): Promise<DoctorResult> {
+    const options = normalizeOptions(projectPathOrOptions);
     const orchestrator = await this.checkOrchestrator();
-    const targetProject = projectPath ? await this.checkTargetProject(projectPath) : undefined;
+    const targetProject = options.projectPath ? await this.checkTargetProject(options.projectPath, options) : undefined;
     const checks = [...orchestrator.checks, ...(targetProject?.checks ?? [])];
     const warnings = checks.filter((check) => check.status === "warn").map((check) => `${check.name}: ${check.details}`);
     const errors = checks.filter((check) => check.status === "fail").map((check) => `${check.name}: ${check.details}`);
 
     return {
       result: errors.length > 0 ? "NOT_READY" : warnings.length > 0 ? "READY_WITH_WARNINGS" : "READY",
+      profile: options.profile,
+      allowComposeConfigOutput: options.allowComposeConfigOutput,
       orchestrator,
       targetProject,
       warnings,
@@ -102,7 +120,7 @@ export class DoctorService {
     };
   }
 
-  private async checkTargetProject(projectPath: string): Promise<DiagnosticSection & { projectPath: string }> {
+  private async checkTargetProject(projectPath: string, options: NormalizedDoctorRunOptions): Promise<DiagnosticSection & { projectPath: string }> {
     const health = await this.projectHealth.check(projectPath);
     const forbidden = health.exists && health.isGitRepo ? await this.forbiddenTrackedPaths(health.projectPath) : [];
     const checks: DiagnosticCheck[] = [
@@ -118,11 +136,34 @@ export class DoctorService {
       forbidden.length === 0 ? pass("target forbidden paths are not tracked", "") : fail("target forbidden paths are not tracked", forbidden.join(", "))
     ];
 
+    if (options.profile === "docker-compose" && health.exists) {
+      const composeChecks = await runDockerComposeProfile(health.projectPath, {
+        allowComposeConfigOutput: options.allowComposeConfigOutput
+      });
+      checks.push(...composeChecks);
+    }
+
     return {
       projectPath: health.projectPath,
       checks
     };
   }
+}
+
+function normalizeOptions(projectPathOrOptions?: string | DoctorRunOptions): NormalizedDoctorRunOptions {
+  if (typeof projectPathOrOptions === "string") {
+    return {
+      projectPath: projectPathOrOptions,
+      profile: "default",
+      allowComposeConfigOutput: false
+    };
+  }
+
+  return {
+    projectPath: projectPathOrOptions?.projectPath,
+    profile: projectPathOrOptions?.profile ?? "default",
+    allowComposeConfigOutput: projectPathOrOptions?.allowComposeConfigOutput ?? false
+  };
 }
 
 export function formatDoctorText(result: DoctorResult): string {

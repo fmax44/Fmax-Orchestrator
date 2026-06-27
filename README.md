@@ -298,3 +298,30 @@ npm test
 - [Architecture Decision Log](docs/ADR_RU.md)
 - [Эксплуатация MCP Orchestrator](docs/OPERATIONS_RU.md)
 - [Шаблон задачи для реального проекта](examples/real-project-task-template.md)
+
+## MVP-6: ephemeral smoke and Docker Compose profile
+
+For daily checks, prefer ephemeral smoke so normal task IDs are not consumed:
+
+Для ежедневных проверок используйте smoke `--ephemeral`, чтобы не расходовать обычные task IDs.
+
+```powershell
+npm run smoke -- --project "D:\projects\some-project" --ephemeral
+```
+
+Ephemeral smoke writes only to `.codex/smoke/tasks`, `.codex/smoke/reports`, and `.codex/smoke/state`. It must not change the normal `.codex/state/tasks.json` queue or create regular files in `.codex/tasks`.
+
+Docker Compose projects can use a safe profile:
+
+```powershell
+npm run doctor -- --project "D:\projects\some-project" --profile docker-compose
+npm run smoke -- --project "D:\projects\some-project" --profile docker-compose --ephemeral
+```
+
+The Docker Compose profile checks for a compose file, runs `docker compose version`, and verifies that `docker compose ps` can execute. `docker compose config` is not executed by default because its output may contain resolved env values. If needed, run it explicitly:
+
+```powershell
+npm run doctor -- --project "D:\projects\some-project" --profile docker-compose --allow-compose-config-output
+```
+
+Even with `--allow-compose-config-output`, reports store only pass/fail, exit code, and a warning. Full `docker compose config` stdout/stderr is intentionally not stored.
