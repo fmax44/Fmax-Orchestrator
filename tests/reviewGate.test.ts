@@ -125,20 +125,44 @@ describe("ReviewGateService", () => {
     expect(result.reviewReportPath).toBe(`.codex/reports/${taskId}-review.md`);
     expect(report).toContain(`# Review Gate for Task ${taskId}`);
   });
+
+  it("stores lastReviewGate provenance when writeReport is used", async () => {
+    const projectPath = await readyProject("node");
+    const taskId = await docsTaskWithReport(projectPath);
+
+    const result = await new ReviewGateService().run({
+      projectPath,
+      taskId,
+      checks: ["git status --short"],
+      writeReport: true
+    });
+    const state = await new TaskStore().readState(projectPath);
+    const task = state.tasks.find((item) => item.id === taskId);
+
+    expect(result.reviewHash).toMatch(/^sha256:/);
+    expect(task?.lastReviewGate?.reviewHash).toBe(result.reviewHash);
+    expect(task?.lastReviewGate?.reviewReportPath).toBe(`.codex/reports/${taskId}-review.md`);
+  });
 });
 
 describe("approve_task Review Gate integration", () => {
   it("allows approval when Review Gate is APPROVABLE", async () => {
-    const projectPath = await readyProject("basic");
+    const projectPath = await readyProject("node");
     const taskId = await docsTaskWithReport(projectPath);
+    await new ReviewGateService().run({
+      projectPath,
+      taskId,
+      checks: ["git status --short"],
+      writeReport: true
+    });
 
     const result = (await createToolHandlers().approveTask({
       projectPath,
       taskId,
       decision: "Approved."
-    })) as { task: { status: string }; reviewGate: { decision: string } };
+    })) as { status: string; reviewGate: { decision: string } };
 
-    expect(result.task.status).toBe("approved");
+    expect(result.status).toBe("approved");
     expect(result.reviewGate.decision).toBe("APPROVABLE");
   });
 
@@ -149,6 +173,12 @@ describe("approve_task Review Gate integration", () => {
     await safeExec(projectPath, "git add docker-compose.yml");
     await safeExec(projectPath, "git commit -m compose");
     await writeFile(path.join(projectPath, "docker-compose.yml"), "services:\n  app:\n    image: busybox\n", "utf8");
+    await new ReviewGateService().run({
+      projectPath,
+      taskId,
+      checks: ["git status --short"],
+      writeReport: true
+    });
 
     await expect(
       createToolHandlers().approveTask({
@@ -156,7 +186,7 @@ describe("approve_task Review Gate integration", () => {
         taskId,
         decision: "Approved."
       })
-    ).rejects.toThrow(/requires manual review/);
+    ).rejects.toThrow(/requires.*review|overrideReviewGate/i);
 
     await expect(
       createToolHandlers().approveTask({
@@ -165,17 +195,12 @@ describe("approve_task Review Gate integration", () => {
         decision: "Approved with override.",
         overrideReviewGate: true
       })
-    ).resolves.toMatchObject({ task: { status: "approved" } });
+    ).resolves.toMatchObject({ status: "approved" });
   });
 
   it("blocks approval when Review Gate is BLOCKED", async () => {
-    const projectPath = await readyProject("basic");
+    const projectPath = await readyProject("node");
     const taskId = await docsTaskWithReport(projectPath);
-    await mkdir(path.join(projectPath, "dist"), { recursive: true });
-    await writeFile(path.join(projectPath, "dist", "app.js"), "old", "utf8");
-    await safeExec(projectPath, "git add dist/app.js");
-    await safeExec(projectPath, "git commit -m dist");
-    await writeFile(path.join(projectPath, "dist", "app.js"), "new", "utf8");
 
     await expect(
       createToolHandlers().approveTask({
@@ -183,17 +208,12 @@ describe("approve_task Review Gate integration", () => {
         taskId,
         decision: "Approved."
       })
-    ).rejects.toThrow(/blocked approval/);
+    ).rejects.toThrow(/writeReport: true/);
   });
 
   it("force approval requires forceReason", async () => {
-    const projectPath = await readyProject("basic");
+    const projectPath = await readyProject("node");
     const taskId = await docsTaskWithReport(projectPath);
-    await mkdir(path.join(projectPath, "dist"), { recursive: true });
-    await writeFile(path.join(projectPath, "dist", "app.js"), "old", "utf8");
-    await safeExec(projectPath, "git add dist/app.js");
-    await safeExec(projectPath, "git commit -m dist");
-    await writeFile(path.join(projectPath, "dist", "app.js"), "new", "utf8");
 
     await expect(
       createToolHandlers().approveTask({
@@ -206,13 +226,8 @@ describe("approve_task Review Gate integration", () => {
   });
 
   it("force approval writes decision log", async () => {
-    const projectPath = await readyProject("basic");
+    const projectPath = await readyProject("node");
     const taskId = await docsTaskWithReport(projectPath);
-    await mkdir(path.join(projectPath, "dist"), { recursive: true });
-    await writeFile(path.join(projectPath, "dist", "app.js"), "old", "utf8");
-    await safeExec(projectPath, "git add dist/app.js");
-    await safeExec(projectPath, "git commit -m dist");
-    await writeFile(path.join(projectPath, "dist", "app.js"), "new", "utf8");
 
     await createToolHandlers().approveTask({
       projectPath,
@@ -226,9 +241,87 @@ describe("approve_task Review Gate integration", () => {
     expect(decisionLog).toContain("FORCE APPROVAL REASON");
     expect(decisionLog).toContain("Emergency documented exception.");
   });
+
+  it("blocks approval when review is stale", async () => {
+    const projectPath = await readyProject("node");
+    const taskId = await docsTaskWithReport(projectPath);
+    await new ReviewGateService().run({
+      projectPath,
+      taskId,
+      checks: ["git status --short"],
+      writeReport: true
+    });
+    const state = await new TaskStore().readState(projectPath);
+    const task = state.tasks.find((item) => item.id === taskId);
+    if (!task?.lastReviewGate) {
+      throw new Error("Missing lastReviewGate");
+    }
+    task.lastReviewGate.createdAt = "2000-01-01T00:00:00.000Z";
+    await writeFile(path.join(projectPath, ".codex", "state", "tasks.json"), `${JSON.stringify(state, null, 2)}\n`, "utf8");
+
+    await expect(
+      createToolHandlers().approveTask({
+        projectPath,
+        taskId,
+        decision: "Approved."
+      })
+    ).rejects.toThrow(/stale|overrideReviewGate/i);
+  });
+
+  it("blocks approval when review hash mismatches", async () => {
+    const projectPath = await readyProject("node");
+    const taskId = await docsTaskWithReport(projectPath);
+    await new ReviewGateService().run({
+      projectPath,
+      taskId,
+      checks: ["git status --short"],
+      writeReport: true
+    });
+    await writeFile(path.join(projectPath, ".codex", "reports", `${taskId}-review.md`), "tampered", "utf8");
+
+    await expect(
+      createToolHandlers().approveTask({
+        projectPath,
+        taskId,
+        decision: "Approved."
+      })
+    ).rejects.toThrow(/hash does not match/);
+  });
+
+  it("CLI approve works on the happy path", async () => {
+    const projectPath = await readyProject("node");
+    const taskId = await docsTaskWithReport(projectPath);
+    await execaCommand(`npm run review -- --project "${projectPath}" --task ${taskId} --checks "git status --short" --write-report --format json`, {
+      cwd: process.cwd(),
+      shell: true
+    });
+
+    const result = await execaCommand(
+      `npm run approve -- --project "${projectPath}" --task ${taskId} --decision "Approved after strict review"`,
+      {
+        cwd: process.cwd(),
+        shell: true
+      }
+    );
+
+    expect(result.stdout).toContain('"status": "approved"');
+    expect(result.stdout).toContain('"decision": "APPROVABLE"');
+  });
+
+  it("CLI approve is blocked without review provenance", async () => {
+    const projectPath = await readyProject("node");
+    const taskId = await docsTaskWithReport(projectPath);
+
+    await expect(
+      execaCommand(`npm run approve -- --project "${projectPath}" --task ${taskId} --decision "Approved after strict review"`, {
+        cwd: process.cwd(),
+        shell: true
+      })
+    ).rejects.toThrow();
+  });
 });
 
-async function readyProject(policy: "basic" | "docker-compose"): Promise<string> {
+async function readyProject(policy: "basic" | "node" | "docker-compose"): Promise<string> {
   const projectPath = path.join(os.tmpdir(), `chatgpt-codex-mcp-review-${crypto.randomUUID()}`);
   await mkdir(projectPath, { recursive: true });
   await safeExec(projectPath, "git init");

@@ -11,6 +11,7 @@ import { SmokeRunner } from "../services/smokeRunner.js";
 import type { CheckProfile } from "../services/dockerComposeProfile.js";
 import { ProjectPolicyService } from "../services/projectPolicy.js";
 import { ReviewGateService } from "../services/reviewGate.js";
+import { ApprovalService } from "../services/approvalService.js";
 import { toolNames } from "./toolNames.js";
 
 export { toolNames };
@@ -86,7 +87,8 @@ export function createToolHandlers(
   doctorService = new DoctorService(),
   smokeRunner = new SmokeRunner(),
   policyService = new ProjectPolicyService(),
-  reviewGateService = new ReviewGateService()
+  reviewGateService = new ReviewGateService(),
+  approvalService = new ApprovalService()
 ): ToolHandlers {
   return {
     async createTask(input) {
@@ -150,39 +152,7 @@ export function createToolHandlers(
       return testRunner.run(input.projectPath, input.commands, { timeoutMs: input.timeoutMs });
     },
     async approveTask(input) {
-      const review = await reviewGateService.run({
-        projectPath: input.projectPath,
-        taskId: input.taskId,
-        checks: ["git status --short"],
-        requireReport: true
-      });
-
-      if (review.decision === "BLOCKED" && !input.force) {
-        throw new Error(`Review Gate blocked approval: ${review.errors.join("; ")}`);
-      }
-
-      if (review.decision === "BLOCKED" && input.force && !input.forceReason?.trim()) {
-        throw new Error("forceReason is required when force approving a BLOCKED task.");
-      }
-
-      if (review.decision === "NEEDS_REVIEW" && !input.overrideReviewGate && !input.force) {
-        throw new Error(`Review Gate requires manual review before approval: ${review.warnings.join("; ")}`);
-      }
-
-      const overrideNote =
-        review.decision === "NEEDS_REVIEW" && (input.overrideReviewGate || input.force)
-          ? `\n\nReview Gate override used. Warnings:\n${review.warnings.map((warning) => `- ${warning}`).join("\n")}`
-          : "";
-      const forceNote =
-        review.decision === "BLOCKED" && input.force
-          ? `\n\nFORCE APPROVAL REASON:\n${input.forceReason?.trim()}\n\nReview Gate decision: ${review.decision}\nErrors:\n${review.errors.map((error) => `- ${error}`).join("\n")}`
-          : "";
-      const task = await taskStore.approveTask(input.projectPath, input.taskId, `${input.decision}${overrideNote}${forceNote}`);
-      return {
-        task,
-        reviewGate: review,
-        warnings: input.force ? ["Task was force-approved despite Review Gate BLOCKED decision."] : []
-      };
+      return approvalService.approve(input);
     },
     async rejectTask(input) {
       return { task: await taskStore.rejectTask(input.projectPath, input.taskId, input.reason, input.requiredFixes) };

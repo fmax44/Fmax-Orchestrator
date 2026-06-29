@@ -384,3 +384,29 @@ Review Gate returns:
 - `APPROVABLE` - `approve_task` is allowed.
 - `NEEDS_REVIEW` - `approve_task` requires `overrideReviewGate: true`.
 - `BLOCKED` - `approve_task` is blocked unless `force: true` and `forceReason` are provided.
+
+## MVP-9: Strict Workflow Mode and audit provenance
+
+Strict workflow mode makes Review Gate provenance a required part of approval.
+
+- `review --write-report` writes `.codex/reports/<task>-review.md`.
+- The review result is hashed and saved into `.codex/state/tasks.json` as `lastReviewGate`.
+- Strict `approve_task` and CLI `approve` validate stored provenance before approval.
+- `overrideReviewGate` can bypass only `NEEDS_REVIEW`.
+- `force` can bypass only `BLOCKED`, and only with non-empty `forceReason`.
+
+Workflow settings live in `.codex/project-policy.json` under `workflow`:
+
+- `strictReviewGate`
+- `requireReviewReportBeforeApprove`
+- `maxReviewAgeMinutes`
+- `requireCleanGitForApprove`
+
+Recommended strict flow:
+
+```powershell
+npm run review -- --project "D:\projects\some-project" --task 0001 --write-report --format json
+npm run approve -- --project "D:\projects\some-project" --task 0001 --decision "Approved after strict review"
+```
+
+`npm run review -- --format json` now includes `reviewHash`, `reviewReportPath`, and `validUntil`.

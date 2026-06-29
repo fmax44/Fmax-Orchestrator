@@ -11,6 +11,7 @@
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "bootstrap": "tsx src/cli/bootstrap.ts",
+    "approve": "tsx src/cli/approve.ts",
     "doctor": "tsx src/cli/doctor.ts",
     "policy": "tsx src/cli/policy.ts",
     "review": "tsx src/cli/review.ts",

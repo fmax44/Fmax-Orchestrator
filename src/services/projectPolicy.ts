@@ -10,6 +10,13 @@ import type { CheckProfile } from "./dockerComposeProfile.js";
 export type PolicyPreset = "basic" | "node" | "docker-compose" | "python" | "custom";
 export type DefaultSmokeMode = "legacy" | "ephemeral";
 
+const workflowSchema = z.object({
+  strictReviewGate: z.boolean().default(false),
+  requireReviewReportBeforeApprove: z.boolean().default(true),
+  maxReviewAgeMinutes: z.number().int().positive().default(60),
+  requireCleanGitForApprove: z.boolean().default(false)
+});
+
 export const projectPolicySchema = z.object({
   version: z.literal(1),
   projectName: z.string().min(1),
@@ -23,7 +30,8 @@ export const projectPolicySchema = z.object({
   requiredChecks: z.record(z.array(z.string())).default({}),
   sensitiveOutputCommands: z.array(z.string()).default([]),
   manualApprovalRequiredFor: z.array(z.string()).default([]),
-  privateFolders: z.array(z.string()).default([])
+  privateFolders: z.array(z.string()).default([]),
+  workflow: workflowSchema.default({})
 });
 
 export type ProjectPolicy = z.infer<typeof projectPolicySchema>;
@@ -298,7 +306,13 @@ export function createPresetPolicy(projectPath: string, preset: PolicyPreset): P
     },
     sensitiveOutputCommands: ["env", "set", "printenv"],
     manualApprovalRequiredFor: [".env*", ".codex/**"],
-    privateFolders: []
+    privateFolders: [],
+    workflow: {
+      strictReviewGate: false,
+      requireReviewReportBeforeApprove: true,
+      maxReviewAgeMinutes: 60,
+      requireCleanGitForApprove: false
+    }
   };
 
   if (preset === "node") {
@@ -309,6 +323,12 @@ export function createPresetPolicy(projectPath: string, preset: PolicyPreset): P
       requiredChecks: {
         ...common.requiredChecks,
         node: ["npm run build", "npm test", "npm run lint"]
+      },
+      workflow: {
+        strictReviewGate: true,
+        requireReviewReportBeforeApprove: true,
+        maxReviewAgeMinutes: 60,
+        requireCleanGitForApprove: false
       }
     };
   }
@@ -339,7 +359,13 @@ export function createPresetPolicy(projectPath: string, preset: PolicyPreset): P
       },
       sensitiveOutputCommands: ["docker compose config", "env", "set", "printenv"],
       manualApprovalRequiredFor: ["docker-compose.yml", ".env*", "backend/alembic/**", "backend/migrations/**", "storage/**", "backups/**"],
-      privateFolders: ["storage/uploads", "storage/smoke-tests", "backups"]
+      privateFolders: ["storage/uploads", "storage/smoke-tests", "backups"],
+      workflow: {
+        strictReviewGate: true,
+        requireReviewReportBeforeApprove: true,
+        maxReviewAgeMinutes: 60,
+        requireCleanGitForApprove: false
+      }
     };
   }
 

@@ -183,3 +183,32 @@ Review Gate возвращает:
 - `BLOCKED` - approve запрещён без `force: true` и непустого `forceReason`.
 
 `approve_task` запускает Review Gate автоматически, поэтому ручной approve больше не должен обходить policy, diff и report checks.
+
+## 13. Strict Workflow Mode
+
+В strict workflow сначала нужно получить и сохранить provenance Review Gate:
+
+```powershell
+npm run review -- --project "D:\projects\syscool-kb" --task 0001 --write-report --format json
+```
+
+После этого задача принимается через CLI `approve` или MCP `approve_task`:
+
+```powershell
+npm run approve -- --project "D:\projects\syscool-kb" --task 0001 --decision "Approved after strict review"
+```
+
+Strict approve проверяет:
+
+- что в `.codex/state/tasks.json` есть `lastReviewGate`;
+- что decision был `APPROVABLE`, `NEEDS_REVIEW` или `BLOCKED` с ожидаемой логикой bypass;
+- что review report существует;
+- что `reviewHash` совпадает с фактическим содержимым review report;
+- что provenance не устарел по `maxReviewAgeMinutes`;
+- что Git clean, если policy включает `requireCleanGitForApprove`.
+
+Правила bypass:
+
+- `overrideReviewGate` допустим только для `NEEDS_REVIEW`;
+- `force` допустим только для `BLOCKED`;
+- для `force` обязателен непустой `forceReason`.

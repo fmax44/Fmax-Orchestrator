@@ -94,3 +94,33 @@ Recommended action: reject_task
 ```
 
 Force approval требует явного `forceReason`, который записывается в architect decisions.
+
+## 11. Provenance и срок годности review
+
+Если Review Gate запускается с `--write-report`, Orchestrator сохраняет provenance в `.codex/state/tasks.json`:
+
+- `decision`
+- `reviewReportPath`
+- `reviewHash`
+- `createdAt`
+- `changedFiles`
+- `warnings`
+- `errors`
+
+CLI JSON-ответ также содержит:
+
+- `reviewHash`
+- `reviewReportPath`
+- `validUntil`
+
+Это нужно для strict approve: approval опирается не на новый ad-hoc review, а на сохранённый проверенный результат.
+
+## 12. Strict approve
+
+В strict workflow `approve_task` и `npm run approve` не принимают задачу без валидного provenance.
+
+- Missing provenance или missing report: `BLOCKED`.
+- Hash mismatch: `BLOCKED`.
+- Stale review: `NEEDS_REVIEW`.
+- `overrideReviewGate` может пройти только `NEEDS_REVIEW`.
+- `force` может пройти только `BLOCKED` и требует `forceReason`.

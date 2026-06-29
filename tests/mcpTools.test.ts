@@ -45,7 +45,7 @@ describe("MCP tool registry", () => {
         force: true,
         forceReason: "MCP handler smoke test uses a minimal non-Git temp project."
       })
-    ).resolves.toMatchObject({ task: { status: "approved" } });
+    ).resolves.toMatchObject({ status: "approved" });
   });
 });
 

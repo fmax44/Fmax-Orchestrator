@@ -18,6 +18,7 @@ describe("ProjectPolicyService", () => {
 
     expect(result.policy?.created).toBe(true);
     expect(result.policy?.policy.defaultProfile).toBe("default");
+    expect(result.policy?.policy.workflow.strictReviewGate).toBe(false);
   });
 
   it("creates a node policy", async () => {
@@ -27,6 +28,7 @@ describe("ProjectPolicyService", () => {
 
     expect(result.policy?.policy.allowedCommands).toContain("npm run build");
     expect(result.policy?.policy.requiredChecks.node).toContain("npm test");
+    expect(result.policy?.policy.workflow.strictReviewGate).toBe(true);
   });
 
   it("creates a docker-compose policy", async () => {
@@ -36,6 +38,7 @@ describe("ProjectPolicyService", () => {
 
     expect(result.policy?.policy.defaultProfile).toBe("docker-compose");
     expect(result.policy?.policy.blockedCommands).toContain("docker compose config");
+    expect(result.policy?.policy.workflow.strictReviewGate).toBe(true);
   });
 
   it("does not overwrite an existing policy without force", async () => {

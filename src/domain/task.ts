@@ -1,5 +1,15 @@
 import type { TaskStatus } from "./status.js";
 
+export interface ReviewGateProvenance {
+  decision: "APPROVABLE" | "NEEDS_REVIEW" | "BLOCKED";
+  reviewReportPath: string;
+  reviewHash: string;
+  createdAt: string;
+  changedFiles: string[];
+  warnings: string[];
+  errors: string[];
+}
+
 export interface TaskRecord {
   id: string;
   title: string;
@@ -8,6 +18,7 @@ export interface TaskRecord {
   reportPath: string;
   createdAt: string;
   updatedAt: string;
+  lastReviewGate?: ReviewGateProvenance;
 }
 
 export interface CreateTaskData {

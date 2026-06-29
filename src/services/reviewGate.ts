@@ -1,4 +1,5 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { TaskStore } from "./taskStore.js";
 import { ProjectPolicyService } from "./projectPolicy.js";
@@ -35,7 +36,10 @@ export interface ReviewGateResult {
   errors: string[];
   manualApprovalRequired: boolean;
   recommendedAction: ReviewGateRecommendedAction;
+  strict: boolean;
+  reviewHash?: string;
   reviewReportPath?: string;
+  validUntil?: string;
 }
 
 export class ReviewGateService {
@@ -55,6 +59,9 @@ export class ReviewGateService {
     const errors: string[] = [];
     let manualApprovalRequired = false;
     let changedFiles: string[] = [];
+    const policy = await this.policyService.readPolicy(root).then((result) => result.policy).catch(() => undefined);
+    const workflow = policy?.workflow;
+    const strict = workflow?.strictReviewGate ?? false;
 
     const task = await this.taskStore.getTask(root, options.taskId).catch((error: unknown) => {
       errors.push(error instanceof Error ? error.message : String(error));
@@ -140,11 +147,27 @@ export class ReviewGateService {
       warnings: unique(warnings),
       errors: unique(errors),
       manualApprovalRequired,
-      recommendedAction: decision === "APPROVABLE" ? "approve_task" : decision === "NEEDS_REVIEW" ? "manual_review" : "reject_task"
+      recommendedAction: decision === "APPROVABLE" ? "approve_task" : decision === "NEEDS_REVIEW" ? "manual_review" : "reject_task",
+      strict
     };
 
     if (options.writeReport) {
       result.reviewReportPath = await this.writeReport(root, result);
+      result.reviewHash = await hashFile(path.join(root, result.reviewReportPath));
+      const createdAt = new Date().toISOString();
+      result.validUntil = addMinutes(createdAt, workflow?.maxReviewAgeMinutes ?? 60);
+      await this.taskStore.updateReviewGate(root, result.taskId, {
+        decision: result.decision,
+        reviewReportPath: result.reviewReportPath,
+        reviewHash: result.reviewHash,
+        createdAt,
+        changedFiles: result.changedFiles,
+        warnings: result.warnings,
+        errors: result.errors
+      });
+    } else {
+      warnings.push("Review provenance was not saved because writeReport=false.");
+      result.warnings = unique(warnings);
     }
 
     return result;
@@ -166,7 +189,10 @@ export function formatReviewGateText(result: ReviewGateResult): string {
     `Decision: ${result.decision}`,
     `Summary: ${result.summary}`,
     `Recommended action: ${result.recommendedAction}`,
+    `Strict workflow: ${result.strict ? "yes" : "no"}`,
     `Manual approval required: ${result.manualApprovalRequired ? "yes" : "no"}`,
+    result.reviewHash ? `Review hash: ${result.reviewHash}` : undefined,
+    result.validUntil ? `Valid until: ${result.validUntil}` : undefined,
     "",
     "Checks:",
     ...result.checks.map((check) => `- [${check.status.toUpperCase()}] ${check.name}${check.details ? ` - ${check.details}` : ""}`),
@@ -254,4 +280,15 @@ function listOrNone(items: string[]): string[] {
 
 function unique(items: string[]): string[] {
   return [...new Set(items)];
+}
+
+async function hashFile(filePath: string): Promise<string> {
+  const content = await readFile(filePath, "utf8");
+  return `sha256:${createHash("sha256").update(content).digest("hex")}`;
+}
+
+function addMinutes(isoString: string, minutes: number): string {
+  const date = new Date(isoString);
+  date.setMinutes(date.getMinutes() + minutes);
+  return date.toISOString();
 }

@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { CreateTaskData, TaskRecord, TaskState } from "../domain/task.js";
+import type { CreateTaskData, ReviewGateProvenance, TaskRecord, TaskState } from "../domain/task.js";
 import type { TaskReport } from "../domain/report.js";
 import type { TaskStatus } from "../domain/status.js";
 import { isTaskStatus } from "../domain/status.js";
@@ -148,6 +148,27 @@ export class TaskStore {
       body: decision
     });
     return task;
+  }
+
+  async updateReviewGate(projectPath: string, taskId: string, provenance: ReviewGateProvenance): Promise<TaskRecord> {
+    const state = await this.readState(projectPath);
+    const index = state.tasks.findIndex((task) => task.id === taskId);
+
+    if (index === -1) {
+      throw new Error(`Task not found: ${taskId}`);
+    }
+
+    const updated: TaskRecord = {
+      ...state.tasks[index],
+      lastReviewGate: provenance,
+      updatedAt: new Date().toISOString()
+    };
+
+    await this.writeState(projectPath, {
+      tasks: state.tasks.map((task, taskIndex) => (taskIndex === index ? updated : task))
+    });
+
+    return updated;
   }
 
   async rejectTask(projectPath: string, taskId: string, reason: string, requiredFixes: string[]): Promise<TaskRecord> {

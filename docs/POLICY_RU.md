@@ -193,3 +193,31 @@ npm run review -- --project "D:\projects\syscool-kb" --task 0001 --format json
 - Для обычной проверки использовать ephemeral smoke.
 - Для документационных задач ограничивать `Files Allowed` значениями `docs/**` и `README.md`.
 - Для изменений `docker-compose.yml`, миграций и storage всегда требовать ручной approval.
+
+## 14. Workflow settings
+
+Начиная с MVP-9 policy может задавать strict approval workflow:
+
+```json
+{
+  "workflow": {
+    "strictReviewGate": true,
+    "requireReviewReportBeforeApprove": true,
+    "maxReviewAgeMinutes": 60,
+    "requireCleanGitForApprove": false
+  }
+}
+```
+
+Смысл полей:
+
+- `strictReviewGate` включает approval через сохранённый Review Gate provenance.
+- `requireReviewReportBeforeApprove` резервирует правило, что approve должен опираться на Review Gate report.
+- `maxReviewAgeMinutes` ограничивает срок жизни сохранённого review.
+- `requireCleanGitForApprove` требует clean working tree в момент approve.
+
+Preset defaults:
+
+- `basic` -> strict mode выключен;
+- `node` -> strict mode включён;
+- `docker-compose` -> strict mode включён.
