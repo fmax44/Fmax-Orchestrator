@@ -212,3 +212,20 @@ Strict approve проверяет:
 - `overrideReviewGate` допустим только для `NEEDS_REVIEW`;
 - `force` допустим только для `BLOCKED`;
 - для `force` обязателен непустой `forceReason`.
+
+## 14. Project Status Dashboard
+
+Для быстрой сводки по проекту используйте:
+
+```powershell
+npm run status -- --project "D:\projects\syscool-kb"
+npm run status -- --project "D:\projects\syscool-kb" --format json
+```
+
+Команда показывает Git, policy, doctor readiness, задачи, последние отчёты, Review Gate provenance и `recommendedAction`.
+
+Если нужно выполнить smoke прямо во время status:
+
+```powershell
+npm run status -- --project "D:\projects\syscool-kb" --include-smoke
+```

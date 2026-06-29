@@ -299,6 +299,7 @@ npm test
 - [Эксплуатация MCP Orchestrator](docs/OPERATIONS_RU.md)
 - [Project Policy](docs/POLICY_RU.md)
 - [Review Gate](docs/REVIEW_GATE_RU.md)
+- [Project Status](docs/STATUS_RU.md)
 - [Шаблон задачи для реального проекта](examples/real-project-task-template.md)
 
 ## MVP-6: ephemeral smoke and Docker Compose profile
@@ -410,3 +411,20 @@ npm run approve -- --project "D:\projects\some-project" --task 0001 --decision "
 ```
 
 `npm run review -- --format json` now includes `reviewHash`, `reviewReportPath`, and `validUntil`.
+
+## MVP-10: Project Status Dashboard CLI
+
+Use `status` when you need one quick dashboard-style answer for a managed project:
+
+```powershell
+npm run status -- --project "D:\projects\some-project"
+npm run status -- --project "D:\projects\some-project" --format json
+```
+
+MCP tool:
+
+```text
+project_status
+```
+
+The status summary includes Git, policy, doctor readiness, task queue counts, latest reports, Review Gate provenance, stale review detection, and `recommendedAction`.

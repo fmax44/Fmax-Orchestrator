@@ -124,3 +124,21 @@ CLI JSON-ответ также содержит:
 - Stale review: `NEEDS_REVIEW`.
 - `overrideReviewGate` может пройти только `NEEDS_REVIEW`.
 - `force` может пройти только `BLOCKED` и требует `forceReason`.
+
+## 13. Проверка review через project status
+
+Команда `status` показывает последнее Review Gate provenance без ручного чтения `.codex/state/tasks.json`:
+
+```powershell
+npm run status -- --project "D:\projects\syscool-kb"
+```
+
+В status видны:
+
+- last decision;
+- review hash;
+- valid until;
+- expired;
+- recommendedAction.
+
+Если strict review устарел, status вернёт `recommendedAction = rerun_review_gate`.

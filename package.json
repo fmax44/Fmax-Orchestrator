@@ -16,6 +16,7 @@
     "policy": "tsx src/cli/policy.ts",
     "review": "tsx src/cli/review.ts",
     "smoke": "tsx src/cli/smoke.ts",
+    "status": "tsx src/cli/status.ts",
     "test": "vitest run",
     "lint": "eslint ."
   },

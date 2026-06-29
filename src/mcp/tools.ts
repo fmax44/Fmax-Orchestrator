@@ -12,6 +12,7 @@ import type { CheckProfile } from "../services/dockerComposeProfile.js";
 import { ProjectPolicyService } from "../services/projectPolicy.js";
 import { ReviewGateService } from "../services/reviewGate.js";
 import { ApprovalService } from "../services/approvalService.js";
+import { ProjectStatusService } from "../services/projectStatus.js";
 import { toolNames } from "./toolNames.js";
 
 export { toolNames };
@@ -63,6 +64,7 @@ export interface ToolHandlers {
   archiveTask(input: { projectPath: string; taskId: string; reason: string }): Promise<unknown>;
   doctor(input: { projectPath?: string; format?: "json" | "text"; profile?: CheckProfile; allowComposeConfigOutput?: boolean }): Promise<unknown>;
   smokeCheck(input: { projectPath: string; profile?: CheckProfile; ephemeral?: boolean; allowComposeConfigOutput?: boolean }): Promise<unknown>;
+  projectStatus(input: { projectPath: string; includeSmoke?: boolean; includeDoctor?: boolean; includeReview?: boolean; taskId?: string }): Promise<unknown>;
   createNextTask(input: {
     projectPath: string;
     previousTaskId: string;
@@ -88,7 +90,8 @@ export function createToolHandlers(
   smokeRunner = new SmokeRunner(),
   policyService = new ProjectPolicyService(),
   reviewGateService = new ReviewGateService(),
-  approvalService = new ApprovalService()
+  approvalService = new ApprovalService(),
+  projectStatusService = new ProjectStatusService()
 ): ToolHandlers {
   return {
     async createTask(input) {
@@ -181,6 +184,9 @@ export function createToolHandlers(
         ephemeral: input.ephemeral,
         allowComposeConfigOutput: input.allowComposeConfigOutput
       });
+    },
+    async projectStatus(input) {
+      return projectStatusService.check(input);
     },
     async createNextTask(input) {
       const task = await taskStore.createNextTask(input.projectPath, input.previousTaskId, input);
@@ -455,6 +461,22 @@ export function registerTools(server: McpServer, handlers = createToolHandlers()
       }
     },
     async (args) => jsonResult(await handlers.smokeCheck(args))
+  );
+
+  server.registerTool(
+    "project_status",
+    {
+      title: "Project Status",
+      description: "Return a dashboard-style project status summary with git, policy, tasks, reports, review provenance, and recommended next action.",
+      inputSchema: {
+        projectPath: projectPathSchema,
+        includeSmoke: z.boolean().default(false),
+        includeDoctor: z.boolean().default(true),
+        includeReview: z.boolean().default(true),
+        taskId: z.string().optional()
+      }
+    },
+    async (args) => jsonResult(await handlers.projectStatus(args))
   );
 }
 
