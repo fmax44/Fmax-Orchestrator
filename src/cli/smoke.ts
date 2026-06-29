@@ -24,12 +24,13 @@ if (!args.project) {
   }
 }
 
-function parseArgs(args: string[]): { project?: string; format: "text" | "json"; ephemeral: boolean; profile: CheckProfile; allowComposeConfigOutput: boolean } {
+function parseArgs(args: string[]): { project?: string; format: "text" | "json"; ephemeral?: boolean; profile?: CheckProfile; allowComposeConfigOutput: boolean } {
+  const profile = readValue(args, "--profile");
   return {
     project: readValue(args, "--project") ?? readValue(args, "-p"),
     format: readValue(args, "--format") === "json" ? "json" : "text",
-    ephemeral: args.includes("--ephemeral"),
-    profile: readValue(args, "--profile") === "docker-compose" ? "docker-compose" : "default",
+    ephemeral: args.includes("--ephemeral") ? true : undefined,
+    profile: profile === "docker-compose" ? "docker-compose" : profile === "default" ? "default" : undefined,
     allowComposeConfigOutput: args.includes("--allow-compose-config-output")
   };
 }

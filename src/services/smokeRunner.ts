@@ -6,6 +6,7 @@ import { ProjectHealthService } from "./projectHealth.js";
 import { safeExec } from "../utils/safeExec.js";
 import { getCodexPaths, toProjectRelative } from "../utils/paths.js";
 import { runDockerComposeProfile, type CheckProfile, type ProfileCheck } from "./dockerComposeProfile.js";
+import { ProjectPolicyService, type ProjectPolicy } from "./projectPolicy.js";
 
 export type SmokeResultStatus = "PASS" | "FAIL";
 
@@ -42,11 +43,13 @@ export class SmokeRunner {
   constructor(
     private readonly taskStore = new TaskStore(),
     private readonly projectHealth = new ProjectHealthService(),
-    private readonly gitService = new GitService()
+    private readonly gitService = new GitService(),
+    private readonly policyService = new ProjectPolicyService()
   ) {}
 
   async run(projectPath: string, options: SmokeRunOptions = {}): Promise<SmokeResult> {
-    const normalized = normalizeOptions(options);
+    const policy = await this.policyService.readPolicy(projectPath).then((result) => result.policy).catch(() => undefined);
+    const normalized = normalizeOptions(options, policy);
     return normalized.ephemeral ? this.runEphemeral(projectPath, normalized) : this.runLegacy(projectPath, normalized);
   }
 
@@ -362,10 +365,10 @@ function timestamp(): string {
   return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
 }
 
-function normalizeOptions(options: SmokeRunOptions): NormalizedSmokeRunOptions {
+function normalizeOptions(options: SmokeRunOptions, policy?: ProjectPolicy): NormalizedSmokeRunOptions {
   return {
-    ephemeral: options.ephemeral ?? false,
-    profile: options.profile ?? "default",
+    ephemeral: options.ephemeral ?? policy?.defaultSmokeMode === "ephemeral",
+    profile: options.profile ?? policy?.defaultProfile ?? "default",
     allowComposeConfigOutput: options.allowComposeConfigOutput ?? false
   };
 }

@@ -12,6 +12,7 @@
     "dev": "tsx src/index.ts",
     "bootstrap": "tsx src/cli/bootstrap.ts",
     "doctor": "tsx src/cli/doctor.ts",
+    "policy": "tsx src/cli/policy.ts",
     "smoke": "tsx src/cli/smoke.ts",
     "test": "vitest run",
     "lint": "eslint ."

@@ -297,6 +297,7 @@ npm test
 - [Рабочий регламент ChatGPT + Codex + MCP Orchestrator](docs/WORKFLOW_RU.md)
 - [Architecture Decision Log](docs/ADR_RU.md)
 - [Эксплуатация MCP Orchestrator](docs/OPERATIONS_RU.md)
+- [Project Policy](docs/POLICY_RU.md)
 - [Шаблон задачи для реального проекта](examples/real-project-task-template.md)
 
 ## MVP-6: ephemeral smoke and Docker Compose profile
@@ -325,3 +326,38 @@ npm run doctor -- --project "D:\projects\some-project" --profile docker-compose 
 ```
 
 Even with `--allow-compose-config-output`, reports store only pass/fail, exit code, and a warning. Full `docker compose config` stdout/stderr is intentionally not stored.
+
+## MVP-7: project policy
+
+Projects can define local safety rules in:
+
+```text
+.codex/project-policy.json
+```
+
+Create a policy during bootstrap:
+
+```powershell
+npm run bootstrap -- --project "D:\projects\some-project" --policy basic
+npm run bootstrap -- --project "D:\projects\some-node-project" --policy node
+npm run bootstrap -- --project "D:\projects\syscool-kb" --policy docker-compose
+```
+
+Existing policy files are not overwritten unless `--force-policy` is passed.
+
+Inspect and validate policy:
+
+```powershell
+npm run policy -- --project "D:\projects\some-project"
+npm run policy -- --project "D:\projects\some-project" --format json
+npm run policy -- --project "D:\projects\some-project" --validate-task 0001
+npm run policy -- --project "D:\projects\some-project" --validate-diff
+```
+
+Policy-aware MCP tools:
+
+- `read_policy`
+- `validate_task_against_policy`
+- `validate_diff_against_policy`
+
+`create_task` checks policy before writing a task and adds a `Policy Notes` section to the generated markdown.

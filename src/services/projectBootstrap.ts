@@ -3,6 +3,7 @@ import path from "node:path";
 import { safeExec } from "../utils/safeExec.js";
 import { getCodexPaths, resolveProjectPath } from "../utils/paths.js";
 import { TaskStore } from "./taskStore.js";
+import { ProjectPolicyService, type PolicyCreateResult, type PolicyPreset } from "./projectPolicy.js";
 
 export interface BootstrapResult {
   projectPath: string;
@@ -12,13 +13,22 @@ export interface BootstrapResult {
   codexReadmeCreated: boolean;
   gitignoreUpdated: boolean;
   codexTracked: boolean;
+  policy?: PolicyCreateResult;
   warnings: string[];
 }
 
-export class ProjectBootstrap {
-  constructor(private readonly taskStore = new TaskStore()) {}
+export interface BootstrapOptions {
+  policy?: PolicyPreset;
+  forcePolicy?: boolean;
+}
 
-  async bootstrap(projectPath: string): Promise<BootstrapResult> {
+export class ProjectBootstrap {
+  constructor(
+    private readonly taskStore = new TaskStore(),
+    private readonly policyService = new ProjectPolicyService()
+  ) {}
+
+  async bootstrap(projectPath: string, options: BootstrapOptions = {}): Promise<BootstrapResult> {
     const root = await resolveProjectPath(projectPath);
     const paths = getCodexPaths(root);
     const codexExisted = await exists(paths.codexDir);
@@ -33,6 +43,7 @@ export class ProjectBootstrap {
 
     await this.taskStore.ensureStructure(root);
     await writeCodexReadme(readmePath, root, codexReadmeExisted);
+    const policy = options.policy ? await this.policyService.createPolicy(root, options.policy, options.forcePolicy ?? false) : undefined;
     const gitignoreUpdated = await ensureGitignoreHasCodex(root);
     const codexTracked = await isCodexTracked(root);
     const warnings: string[] = [];
@@ -49,6 +60,7 @@ export class ProjectBootstrap {
       codexReadmeCreated: !codexReadmeExisted,
       gitignoreUpdated,
       codexTracked,
+      policy,
       warnings
     };
   }

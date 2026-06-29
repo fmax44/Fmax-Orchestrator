@@ -11,5 +11,8 @@ export const toolNames = [
   "list_tasks",
   "archive_task",
   "doctor",
-  "smoke_check"
+  "smoke_check",
+  "read_policy",
+  "validate_task_against_policy",
+  "validate_diff_against_policy"
 ] as const;

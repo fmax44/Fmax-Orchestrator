@@ -128,3 +128,40 @@ git ls-files | Select-String -Pattern '(^|/)(\.env$|node_modules/|dist/|\.codex/
 - `.codex/` не трекается Git.
 - Есть понятные build/test checks.
 - Следующая задача маленькая и проверяемая.
+
+## 11. Project policy
+
+Для реальных проектов рекомендуется создать `.codex/project-policy.json`:
+
+```powershell
+npm run bootstrap -- --project "D:\projects\some-project" --policy basic
+npm run bootstrap -- --project "D:\projects\some-node-project" --policy node
+npm run bootstrap -- --project "D:\projects\syscool-kb" --policy docker-compose
+```
+
+Bootstrap не перезаписывает существующую policy без явного флага:
+
+```powershell
+npm run bootstrap -- --project "D:\projects\syscool-kb" --policy docker-compose --force-policy
+```
+
+Проверить policy:
+
+```powershell
+npm run policy -- --project "D:\projects\syscool-kb"
+npm run policy -- --project "D:\projects\syscool-kb" --format json
+```
+
+Проверить задачу перед выдачей Codex:
+
+```powershell
+npm run policy -- --project "D:\projects\syscool-kb" --validate-task 0001
+```
+
+Проверить diff перед approve:
+
+```powershell
+npm run policy -- --project "D:\projects\syscool-kb" --validate-diff
+```
+
+Если есть policy, `create_task` проверяет `filesAllowed` и `requiredChecks`, а затем добавляет в markdown раздел `Policy Notes`. Smoke использует `defaultSmokeMode` и `defaultProfile` из policy, если флаги CLI не заданы явно.

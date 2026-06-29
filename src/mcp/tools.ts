@@ -9,6 +9,7 @@ import { taskStatuses, type TaskStatus } from "../domain/status.js";
 import { DoctorService } from "../services/doctor.js";
 import { SmokeRunner } from "../services/smokeRunner.js";
 import type { CheckProfile } from "../services/dockerComposeProfile.js";
+import { ProjectPolicyService } from "../services/projectPolicy.js";
 import { toolNames } from "./toolNames.js";
 
 export { toolNames };
@@ -30,6 +31,9 @@ export interface ToolHandlers {
     requiredChecks?: string[];
     notes?: string;
   }): Promise<unknown>;
+  readPolicy(input: { projectPath: string }): Promise<unknown>;
+  validateTaskAgainstPolicy(input: { projectPath: string; taskId: string }): Promise<unknown>;
+  validateDiffAgainstPolicy(input: { projectPath: string }): Promise<unknown>;
   getTaskStatus(input: { projectPath: string; taskId?: string }): Promise<unknown>;
   readReport(input: { projectPath: string; taskId: string }): Promise<unknown>;
   inspectDiff(input: { projectPath: string; mode?: DiffMode }): Promise<unknown>;
@@ -63,12 +67,46 @@ export function createToolHandlers(
   architectLog = new ArchitectLog(),
   projectHealthService = new ProjectHealthService(),
   doctorService = new DoctorService(),
-  smokeRunner = new SmokeRunner()
+  smokeRunner = new SmokeRunner(),
+  policyService = new ProjectPolicyService()
 ): ToolHandlers {
   return {
     async createTask(input) {
-      const task = await taskStore.createTask(input.projectPath, input);
-      return { taskId: task.id, taskPath: task.taskPath, status: task.status };
+      const validation = await policyService.validateCreateTask(input.projectPath, input);
+      if (!validation.valid) {
+        throw new Error(`Task violates project policy: ${validation.errors.join("; ")}`);
+      }
+
+      const readPolicy = await policyService.readPolicy(input.projectPath);
+      const policyNotes = readPolicy.policy
+        ? [
+            "Policy file: .codex/project-policy.json",
+            `Default profile: ${readPolicy.policy.defaultProfile}`,
+            "Blocked paths checked: yes",
+            `Manual approval required: ${validation.manualApprovalRequired ? "yes" : "no"}`,
+            ...validation.warnings.map((warning) => `Warning: ${warning}`)
+          ]
+        : ["Policy file: missing", ...validation.warnings.map((warning) => `Warning: ${warning}`)];
+      const task = await taskStore.createTask(input.projectPath, { ...input, policyNotes });
+      return {
+        taskId: task.id,
+        taskPath: task.taskPath,
+        status: task.status,
+        policy: {
+          valid: validation.valid,
+          warnings: validation.warnings,
+          manualApprovalRequired: validation.manualApprovalRequired
+        }
+      };
+    },
+    async readPolicy(input) {
+      return policyService.readPolicy(input.projectPath);
+    },
+    async validateTaskAgainstPolicy(input) {
+      return policyService.validateTaskAgainstPolicy(input.projectPath, input.taskId);
+    },
+    async validateDiffAgainstPolicy(input) {
+      return policyService.validateDiffAgainstPolicy(input.projectPath);
     },
     async getTaskStatus(input) {
       await logOperation(architectLog, input.projectPath, "get-task-status", input.taskId, "Read task status.");
@@ -163,6 +201,43 @@ export function registerTools(server: McpServer, handlers = createToolHandlers()
       }
     },
     async (args) => jsonResult(await handlers.createTask(args))
+  );
+
+  server.registerTool(
+    "read_policy",
+    {
+      title: "Read Project Policy",
+      description: "Read .codex/project-policy.json for a managed project.",
+      inputSchema: {
+        projectPath: projectPathSchema
+      }
+    },
+    async (args) => jsonResult(await handlers.readPolicy(args))
+  );
+
+  server.registerTool(
+    "validate_task_against_policy",
+    {
+      title: "Validate Task Against Policy",
+      description: "Validate a queued task against .codex/project-policy.json.",
+      inputSchema: {
+        projectPath: projectPathSchema,
+        taskId: z.string().min(1)
+      }
+    },
+    async (args) => jsonResult(await handlers.validateTaskAgainstPolicy(args))
+  );
+
+  server.registerTool(
+    "validate_diff_against_policy",
+    {
+      title: "Validate Diff Against Policy",
+      description: "Validate current git diff against .codex/project-policy.json.",
+      inputSchema: {
+        projectPath: projectPathSchema
+      }
+    },
+    async (args) => jsonResult(await handlers.validateDiffAgainstPolicy(args))
   );
 
   server.registerTool(

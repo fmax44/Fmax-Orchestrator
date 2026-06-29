@@ -4,6 +4,7 @@ import { toolNames } from "../mcp/toolNames.js";
 import { safeExec } from "../utils/safeExec.js";
 import { ProjectHealthService } from "./projectHealth.js";
 import { runDockerComposeProfile, type CheckProfile } from "./dockerComposeProfile.js";
+import { ProjectPolicyService } from "./projectPolicy.js";
 
 export type DiagnosticStatus = "pass" | "warn" | "fail";
 export type DoctorResultStatus = "READY" | "READY_WITH_WARNINGS" | "NOT_READY";
@@ -53,17 +54,25 @@ const requiredToolNames = [
   "list_tasks",
   "archive_task",
   "doctor",
-  "smoke_check"
+  "smoke_check",
+  "read_policy",
+  "validate_task_against_policy",
+  "validate_diff_against_policy"
 ];
 
 export class DoctorService {
   constructor(
     private readonly orchestratorPath = process.cwd(),
-    private readonly projectHealth = new ProjectHealthService()
+    private readonly projectHealth = new ProjectHealthService(),
+    private readonly policyService = new ProjectPolicyService()
   ) {}
 
   async run(projectPathOrOptions?: string | DoctorRunOptions): Promise<DoctorResult> {
     const options = normalizeOptions(projectPathOrOptions);
+    if (options.projectPath && options.profile === "default") {
+      const policy = await this.policyService.readPolicy(options.projectPath).then((result) => result.policy).catch(() => undefined);
+      options.profile = policy?.defaultProfile ?? options.profile;
+    }
     const orchestrator = await this.checkOrchestrator();
     const targetProject = options.projectPath ? await this.checkTargetProject(options.projectPath, options) : undefined;
     const checks = [...orchestrator.checks, ...(targetProject?.checks ?? [])];
@@ -141,6 +150,18 @@ export class DoctorService {
         allowComposeConfigOutput: options.allowComposeConfigOutput
       });
       checks.push(...composeChecks);
+    }
+
+    if (health.exists) {
+      const policy = await this.policyService.readPolicy(health.projectPath);
+      checks.push(policy.exists ? pass("policy exists", policy.policyPath) : warn("policy exists", policy.warnings.join("; ")));
+      if (policy.policy) {
+        checks.push(pass("policy version", String(policy.policy.version)));
+        checks.push(pass("policy defaultProfile", policy.policy.defaultProfile));
+        checks.push(pass("policy defaultSmokeMode", policy.policy.defaultSmokeMode));
+      }
+      checks.push(...policy.errors.map((error) => fail("policy schema", error)));
+      checks.push(...policy.warnings.filter(() => policy.exists).map((warning) => warn("policy warning", warning)));
     }
 
     return {

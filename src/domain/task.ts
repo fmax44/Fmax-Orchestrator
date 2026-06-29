@@ -20,6 +20,7 @@ export interface CreateTaskData {
   acceptanceCriteria?: string[];
   requiredChecks?: string[];
   notes?: string;
+  policyNotes?: string[];
 }
 
 export interface CreateTaskInput {
@@ -33,6 +34,7 @@ export interface CreateTaskInput {
   acceptanceCriteria?: string[];
   requiredChecks?: string[];
   notes?: string;
+  policyNotes?: string[];
 }
 
 export interface TaskState {
