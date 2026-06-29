@@ -57,7 +57,8 @@ const requiredToolNames = [
   "smoke_check",
   "read_policy",
   "validate_task_against_policy",
-  "validate_diff_against_policy"
+  "validate_diff_against_policy",
+  "review_gate"
 ];
 
 export class DoctorService {

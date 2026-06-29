@@ -10,6 +10,7 @@ import { DoctorService } from "../services/doctor.js";
 import { SmokeRunner } from "../services/smokeRunner.js";
 import type { CheckProfile } from "../services/dockerComposeProfile.js";
 import { ProjectPolicyService } from "../services/projectPolicy.js";
+import { ReviewGateService } from "../services/reviewGate.js";
 import { toolNames } from "./toolNames.js";
 
 export { toolNames };
@@ -34,11 +35,27 @@ export interface ToolHandlers {
   readPolicy(input: { projectPath: string }): Promise<unknown>;
   validateTaskAgainstPolicy(input: { projectPath: string; taskId: string }): Promise<unknown>;
   validateDiffAgainstPolicy(input: { projectPath: string }): Promise<unknown>;
+  reviewGate(input: {
+    projectPath: string;
+    taskId: string;
+    checks?: string[];
+    requireReport?: boolean;
+    requireCleanForbiddenPaths?: boolean;
+    writeReport?: boolean;
+    format?: "json" | "text";
+  }): Promise<unknown>;
   getTaskStatus(input: { projectPath: string; taskId?: string }): Promise<unknown>;
   readReport(input: { projectPath: string; taskId: string }): Promise<unknown>;
   inspectDiff(input: { projectPath: string; mode?: DiffMode }): Promise<unknown>;
   runTests(input: { projectPath: string; commands: string[]; timeoutMs?: number }): Promise<unknown>;
-  approveTask(input: { projectPath: string; taskId: string; decision: string }): Promise<unknown>;
+  approveTask(input: {
+    projectPath: string;
+    taskId: string;
+    decision: string;
+    overrideReviewGate?: boolean;
+    force?: boolean;
+    forceReason?: string;
+  }): Promise<unknown>;
   rejectTask(input: { projectPath: string; taskId: string; reason: string; requiredFixes: string[] }): Promise<unknown>;
   projectHealth(input: { projectPath: string }): Promise<unknown>;
   listTasks(input: { projectPath: string; status?: TaskStatus }): Promise<unknown>;
@@ -68,7 +85,8 @@ export function createToolHandlers(
   projectHealthService = new ProjectHealthService(),
   doctorService = new DoctorService(),
   smokeRunner = new SmokeRunner(),
-  policyService = new ProjectPolicyService()
+  policyService = new ProjectPolicyService(),
+  reviewGateService = new ReviewGateService()
 ): ToolHandlers {
   return {
     async createTask(input) {
@@ -108,6 +126,9 @@ export function createToolHandlers(
     async validateDiffAgainstPolicy(input) {
       return policyService.validateDiffAgainstPolicy(input.projectPath);
     },
+    async reviewGate(input) {
+      return reviewGateService.run(input);
+    },
     async getTaskStatus(input) {
       await logOperation(architectLog, input.projectPath, "get-task-status", input.taskId, "Read task status.");
       if (input.taskId) {
@@ -129,7 +150,39 @@ export function createToolHandlers(
       return testRunner.run(input.projectPath, input.commands, { timeoutMs: input.timeoutMs });
     },
     async approveTask(input) {
-      return { task: await taskStore.approveTask(input.projectPath, input.taskId, input.decision) };
+      const review = await reviewGateService.run({
+        projectPath: input.projectPath,
+        taskId: input.taskId,
+        checks: ["git status --short"],
+        requireReport: true
+      });
+
+      if (review.decision === "BLOCKED" && !input.force) {
+        throw new Error(`Review Gate blocked approval: ${review.errors.join("; ")}`);
+      }
+
+      if (review.decision === "BLOCKED" && input.force && !input.forceReason?.trim()) {
+        throw new Error("forceReason is required when force approving a BLOCKED task.");
+      }
+
+      if (review.decision === "NEEDS_REVIEW" && !input.overrideReviewGate && !input.force) {
+        throw new Error(`Review Gate requires manual review before approval: ${review.warnings.join("; ")}`);
+      }
+
+      const overrideNote =
+        review.decision === "NEEDS_REVIEW" && (input.overrideReviewGate || input.force)
+          ? `\n\nReview Gate override used. Warnings:\n${review.warnings.map((warning) => `- ${warning}`).join("\n")}`
+          : "";
+      const forceNote =
+        review.decision === "BLOCKED" && input.force
+          ? `\n\nFORCE APPROVAL REASON:\n${input.forceReason?.trim()}\n\nReview Gate decision: ${review.decision}\nErrors:\n${review.errors.map((error) => `- ${error}`).join("\n")}`
+          : "";
+      const task = await taskStore.approveTask(input.projectPath, input.taskId, `${input.decision}${overrideNote}${forceNote}`);
+      return {
+        task,
+        reviewGate: review,
+        warnings: input.force ? ["Task was force-approved despite Review Gate BLOCKED decision."] : []
+      };
     },
     async rejectTask(input) {
       return { task: await taskStore.rejectTask(input.projectPath, input.taskId, input.reason, input.requiredFixes) };
@@ -201,6 +254,24 @@ export function registerTools(server: McpServer, handlers = createToolHandlers()
       }
     },
     async (args) => jsonResult(await handlers.createTask(args))
+  );
+
+  server.registerTool(
+    "review_gate",
+    {
+      title: "Review Gate",
+      description: "Run the unified pre-approval review gate for a task.",
+      inputSchema: {
+        projectPath: projectPathSchema,
+        taskId: z.string().min(1),
+        checks: z.array(z.string().min(1)).optional(),
+        requireReport: z.boolean().optional(),
+        requireCleanForbiddenPaths: z.boolean().optional(),
+        writeReport: z.boolean().default(false),
+        format: z.enum(["json", "text"]).default("json")
+      }
+    },
+    async (args) => jsonResult(await handlers.reviewGate(args))
   );
 
   server.registerTool(
@@ -301,7 +372,10 @@ export function registerTools(server: McpServer, handlers = createToolHandlers()
       inputSchema: {
         projectPath: projectPathSchema,
         taskId: z.string().min(1),
-        decision: z.string().min(1)
+        decision: z.string().min(1),
+        overrideReviewGate: z.boolean().default(false),
+        force: z.boolean().default(false),
+        forceReason: z.string().default("")
       }
     },
     async (args) => jsonResult(await handlers.approveTask(args))

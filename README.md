@@ -298,6 +298,7 @@ npm test
 - [Architecture Decision Log](docs/ADR_RU.md)
 - [Эксплуатация MCP Orchestrator](docs/OPERATIONS_RU.md)
 - [Project Policy](docs/POLICY_RU.md)
+- [Review Gate](docs/REVIEW_GATE_RU.md)
 - [Шаблон задачи для реального проекта](examples/real-project-task-template.md)
 
 ## MVP-6: ephemeral smoke and Docker Compose profile
@@ -361,3 +362,25 @@ Policy-aware MCP tools:
 - `validate_diff_against_policy`
 
 `create_task` checks policy before writing a task and adds a `Policy Notes` section to the generated markdown.
+
+## MVP-8: Review Gate
+
+Review Gate is the standard pre-approval check before `approve_task`.
+
+```powershell
+npm run review -- --project "D:\projects\some-project" --task 0001
+npm run review -- --project "D:\projects\some-project" --task 0001 --format json
+npm run review -- --project "D:\projects\some-project" --task 0001 --write-report
+```
+
+MCP tool:
+
+```text
+review_gate
+```
+
+Review Gate returns:
+
+- `APPROVABLE` - `approve_task` is allowed.
+- `NEEDS_REVIEW` - `approve_task` requires `overrideReviewGate: true`.
+- `BLOCKED` - `approve_task` is blocked unless `force: true` and `forceReason` are provided.

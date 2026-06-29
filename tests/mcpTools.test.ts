@@ -17,6 +17,7 @@ describe("MCP tool registry", () => {
     expect(toolNames).toContain("read_policy");
     expect(toolNames).toContain("validate_task_against_policy");
     expect(toolNames).toContain("validate_diff_against_policy");
+    expect(toolNames).toContain("review_gate");
   });
 
   it("builds the MCP server", () => {
@@ -40,7 +41,9 @@ describe("MCP tool registry", () => {
       handlers.approveTask({
         projectPath,
         taskId: "0001",
-        decision: "Looks good."
+        decision: "Looks good.",
+        force: true,
+        forceReason: "MCP handler smoke test uses a minimal non-Git temp project."
       })
     ).resolves.toMatchObject({ task: { status: "approved" } });
   });

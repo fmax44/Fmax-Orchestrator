@@ -193,16 +193,17 @@ export class ProjectPolicyService {
     let manualApprovalRequired = false;
 
     for (const filePath of changedFiles) {
+      const protectedOrManual = matchesAny(filePath, readResult.policy.protectedFiles) || matchesAny(filePath, readResult.policy.manualApprovalRequiredFor);
       if (matchesAny(filePath, readResult.policy.blockedPaths)) {
         errors.push(`Changed file is blocked by policy: ${filePath}`);
       }
 
-      if (matchesAny(filePath, readResult.policy.protectedFiles) || matchesAny(filePath, readResult.policy.manualApprovalRequiredFor)) {
+      if (protectedOrManual) {
         manualApprovalRequired = true;
         warnings.push(`Changed file requires manual approval: ${filePath}`);
       }
 
-      if (readResult.policy.allowedPaths.length > 0 && !matchesAny(filePath, readResult.policy.allowedPaths)) {
+      if (readResult.policy.allowedPaths.length > 0 && !matchesAny(filePath, readResult.policy.allowedPaths) && !protectedOrManual) {
         errors.push(`Changed file is outside allowedPaths: ${filePath}`);
       }
     }

@@ -18,6 +18,42 @@ Orchestrator может валидировать задачу до выдачи 
 
 Policy является локальным файлом внутри `.codex` и не заменяет человеческий review. Команда может решить версионировать policy отдельно, но по умолчанию `.codex` не tracked.
 
+## ADR-013: Почему approve_task должен проходить через Review Gate
+
+### Решение
+
+`approve_task` должен автоматически запускать Review Gate перед изменением статуса задачи на `approved`.
+
+### Причина
+
+До MVP-8 архитектор вручную вызывал несколько tools: task status, report, diff, tests, policy validation и forbidden paths. Ручная последовательность полезна, но её легко выполнить неполно.
+
+### Последствия
+
+Approval становится единым контролируемым gate: `APPROVABLE` проходит, `NEEDS_REVIEW` требует override, `BLOCKED` требует force reason.
+
+### Ограничения
+
+Review Gate не заменяет человеческое решение. Он собирает evidence и блокирует очевидно опасные сценарии, но архитектор всё равно отвечает за финальное решение.
+
+## ADR-014: Почему BLOCKED нельзя approve без force reason
+
+### Решение
+
+Если Review Gate вернул `BLOCKED`, обычный approve запрещён. Force approve возможен только с `force: true` и непустым `forceReason`.
+
+### Причина
+
+`BLOCKED` означает report missing, blockedPath diff, `.env`, `.codex`, forbidden tracked paths, failed required check или policy failure. Такие исключения должны оставлять явный audit trail.
+
+### Последствия
+
+Force approval записывает причину в architect decisions, а обычный approve не может случайно принять небезопасный diff.
+
+### Ограничения
+
+Force reason не делает изменение безопасным автоматически. Это только фиксирует осознанное исключение для последующего review.
+
 ## ADR-011: Почему blockedPaths важнее allowedPaths
 
 ### Решение

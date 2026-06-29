@@ -173,6 +173,12 @@ npm run policy -- --project "D:\projects\syscool-kb" --validate-diff
 
 Tool: `validate_diff_against_policy`.
 
+Перед approve используйте Review Gate, который вызывает policy/diff checks как часть единого решения:
+
+```powershell
+npm run review -- --project "D:\projects\syscool-kb" --task 0001 --format json
+```
+
 ## 13. Рекомендации для syscool-kb
 
 Для `syscool-kb` использовать preset `docker-compose`.

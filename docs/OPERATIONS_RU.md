@@ -165,3 +165,21 @@ npm run policy -- --project "D:\projects\syscool-kb" --validate-diff
 ```
 
 Если есть policy, `create_task` проверяет `filesAllowed` и `requiredChecks`, а затем добавляет в markdown раздел `Policy Notes`. Smoke использует `defaultSmokeMode` и `defaultProfile` из policy, если флаги CLI не заданы явно.
+
+## 12. Review Gate перед approve
+
+Перед `approve_task` рекомендуется запускать единый Review Gate:
+
+```powershell
+npm run review -- --project "D:\projects\syscool-kb" --task 0001
+npm run review -- --project "D:\projects\syscool-kb" --task 0001 --format json
+npm run review -- --project "D:\projects\syscool-kb" --task 0001 --write-report
+```
+
+Review Gate возвращает:
+
+- `APPROVABLE` - задачу можно принимать.
+- `NEEDS_REVIEW` - нужен `overrideReviewGate: true`.
+- `BLOCKED` - approve запрещён без `force: true` и непустого `forceReason`.
+
+`approve_task` запускает Review Gate автоматически, поэтому ручной approve больше не должен обходить policy, diff и report checks.
