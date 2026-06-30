@@ -203,6 +203,16 @@ Smoke создаёт служебную задачу и отчёт внутри 
 
 MVP не запускает Codex Desktop автоматически. Связка намеренно построена через Git, файловую очередь и отчёты.
 
+Для relay-сводки и следующей задачи:
+
+```powershell
+npm run relay:status -- --project "D:\projects\some-project"
+npm run codex:next -- --project "D:\projects\some-project"
+```
+
+`relay:status` показывает текущую relay-точку: `waitingFor`, `nextActor`, `nextAction`.
+`codex:next` находит следующую pending task, показывает `taskPath`, ожидаемый `reportPath` и инструкцию для Codex. При `--watch` команда ждёт появления report, но не делает approve автоматически.
+
 ## Структура `.codex`
 
 В каждом управляемом проекте сервер создаёт:
@@ -233,6 +243,12 @@ MVP не запускает Codex Desktop автоматически. Связк
 - `archive_task` переносит завершённую задачу в `.codex/archive/<id>/`.
 - `doctor` запускает диагностику Orchestrator и, опционально, target project.
 - `smoke_check` запускает безопасную smoke-проверку target project.
+- `project_status` возвращает полную status-сводку, включая `waitingFor`, `nextActor` и `nextAction`.
+
+Дополнительная документация по relay:
+
+- `docs/REAL_RELAY_WORKFLOW_RU.md`
+- `docs/NO_MANUAL_COPY_WORKFLOW_RU.md`
 
 ## Resources
 
@@ -428,3 +444,29 @@ project_status
 ```
 
 The status summary includes Git, policy, doctor readiness, task queue counts, latest reports, Review Gate provenance, stale review detection, and `recommendedAction`.
+
+## MVP-11: Desktop Dashboard and Launcher
+
+You can now run a local launcher/dashboard for Windows operations:
+
+```powershell
+Copy-Item .\scripts\fmax-orchestrator.config.example.json .\scripts\fmax-orchestrator.config.local.json
+npm run dashboard:start -- --open
+```
+
+Or create a Desktop shortcut:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\create-desktop-shortcut.ps1
+```
+
+The dashboard centralizes:
+
+- ChatGPT open action
+- Codex Desktop open action
+- VPN app open action
+- tunnel health (`healthz` / `readyz`)
+- managed project cards powered by `project_status`
+- local IPv4 and optional public IP lookup
+
+See [docs/DESKTOP_DASHBOARD_RUNBOOK_RU.md](docs/DESKTOP_DASHBOARD_RUNBOOK_RU.md) for the Russian runbook.

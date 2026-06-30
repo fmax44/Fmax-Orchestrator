@@ -24,6 +24,21 @@ describe("TaskStore", () => {
     await expect(readFile(path.join(projectPath, ".codex/tasks/0001-task.md"), "utf8")).resolves.toContain("# Task 0001: One");
   });
 
+  it("allocates the next id after existing task and report artifacts", async () => {
+    const projectPath = await tempProject();
+    const store = new TaskStore();
+    await store.ensureStructure(projectPath);
+    await writeFile(path.join(projectPath, ".codex/reports/0016-report.md"), "# Report for Task 0016\n", "utf8");
+    await writeFile(path.join(projectPath, ".codex/reports/0014-review.md"), "# Review Gate for Task 0014\n\n## Decision\n\nAPPROVABLE\n", "utf8");
+    await writeFile(path.join(projectPath, ".codex/tasks/0015-fix.md"), "# Fix request for Task 0015\n", "utf8");
+
+    const task = await store.createTask(projectPath, taskInput("After artifacts"));
+
+    expect(task.id).toBe("0017");
+    expect(task.taskPath).toBe(".codex/tasks/0017-task.md");
+    expect(task.reportPath).toBe(".codex/reports/0017-report.md");
+  });
+
   it("reads reports and updates status in state and markdown", async () => {
     const projectPath = await tempProject();
     const store = new TaskStore();
@@ -38,6 +53,41 @@ describe("TaskStore", () => {
     expect(updated.status).toBe("reported");
     expect(taskMarkdown).toContain("## Status\n\nreported");
     expect(state.tasks[0]?.status).toBe("reported");
+  });
+
+  it("syncs pending tasks to reported when a report file exists", async () => {
+    const projectPath = await tempProject();
+    const store = new TaskStore();
+    await store.createTask(projectPath, taskInput("Sync me"));
+    await writeFile(path.join(projectPath, ".codex/reports/0001-report.md"), "# Report for Task 0001\n", "utf8");
+
+    const synced = await store.syncReportedTasks(projectPath);
+    const taskMarkdown = await readFile(path.join(projectPath, ".codex/tasks/0001-task.md"), "utf8");
+
+    expect(synced[0]?.status).toBe("reported");
+    expect(taskMarkdown).toContain("## Status\n\nreported");
+  });
+
+  it("does not sync a pending task to reported when a colliding report belongs to another task", async () => {
+    const projectPath = await tempProject();
+    const store = new TaskStore();
+    await store.createTask(projectPath, taskInput("Collision"));
+    await writeFile(path.join(projectPath, ".codex/reports/0001-report.md"), "# Report for Task 9999\n\nHistorical report.\n", "utf8");
+
+    const synced = await store.syncReportedTasks(projectPath);
+    const taskMarkdown = await readFile(path.join(projectPath, ".codex/tasks/0001-task.md"), "utf8");
+
+    expect(synced[0]?.status).toBe("pending");
+    expect(taskMarkdown).toContain("## Status\n\npending");
+  });
+
+  it("rejects reading a colliding report that belongs to another task", async () => {
+    const projectPath = await tempProject();
+    const store = new TaskStore();
+    await store.createTask(projectPath, taskInput("Read collision"));
+    await writeFile(path.join(projectPath, ".codex/reports/0001-report.md"), "# Report for Task 9999\n\nHistorical report.\n", "utf8");
+
+    await expect(store.readReport(projectPath, "0001")).rejects.toThrow("Report content does not belong to task 0001");
   });
 
   it("approves and rejects tasks with decision records", async () => {

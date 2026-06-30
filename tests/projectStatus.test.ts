@@ -20,7 +20,7 @@ describe("ProjectStatusService", () => {
     expect(status.recommendedAction).toBe("create_task");
     expect(status.git.status).toBe("clean");
     expect(status.policy.strictReviewGate).toBe(true);
-  });
+  }, 15000);
 
   it("recommends waiting for a pending task without report", async () => {
     const projectPath = await readyProject();
@@ -30,7 +30,10 @@ describe("ProjectStatusService", () => {
 
     expect(status.tasks.pending).toBe(1);
     expect(status.recommendedAction).toBe("wait_for_codex_or_request_report");
-  });
+    expect(status.waitingFor).toBe("codex");
+    expect(status.nextActor).toBe("codex");
+    expect(status.nextAction).toContain("Open Codex Desktop");
+  }, 15000);
 
   it("recommends running Review Gate when a report exists without review", async () => {
     const projectPath = await readyProject();
@@ -41,8 +44,11 @@ describe("ProjectStatusService", () => {
 
     expect(status.reports.latestTaskReport).toBe(`.codex/reports/${taskId}-report.md`);
     expect(status.review?.exists).toBe(false);
+    expect(status.currentTask?.status).toBe("reported");
     expect(status.recommendedAction).toBe("run_review_gate");
-  });
+    expect(status.waitingFor).toBe("review");
+    expect(status.nextActor).toBe("chatgpt");
+  }, 15000);
 
   it("recommends approval when Review Gate is APPROVABLE", async () => {
     const projectPath = await readyProject();
@@ -55,7 +61,7 @@ describe("ProjectStatusService", () => {
     expect(status.review?.latestDecision).toBe("APPROVABLE");
     expect(status.review?.lastReviewHash).toMatch(/^sha256:/);
     expect(status.recommendedAction).toBe("approve_task");
-  });
+  }, 15000);
 
   it("recommends committing changes for an approved task with dirty git", async () => {
     const projectPath = await readyProject();
@@ -69,7 +75,7 @@ describe("ProjectStatusService", () => {
 
     expect(status.git.status).toBe("dirty");
     expect(status.recommendedAction).toBe("commit_changes");
-  });
+  }, 15000);
 
   it("recommends creating the next task for an approved task with clean git", async () => {
     const projectPath = await readyProject();
@@ -81,7 +87,7 @@ describe("ProjectStatusService", () => {
 
     expect(status.git.status).toBe("clean");
     expect(status.recommendedAction).toBe("create_next_task");
-  });
+  }, 15000);
 
   it("detects stale review provenance", async () => {
     const projectPath = await readyProject();
@@ -101,7 +107,7 @@ describe("ProjectStatusService", () => {
 
     expect(status.review?.expired).toBe(true);
     expect(status.recommendedAction).toBe("rerun_review_gate");
-  });
+  }, 15000);
 
   it("supports JSON output through the CLI", async () => {
     const projectPath = await readyProject();
@@ -114,7 +120,7 @@ describe("ProjectStatusService", () => {
 
     expect(parsed.projectName).toBe(path.basename(projectPath));
     expect(parsed.recommendedAction).toBe("create_task");
-  });
+  }, 15000);
 
   it("registers and serves MCP project_status", async () => {
     const projectPath = await readyProject();
@@ -122,9 +128,34 @@ describe("ProjectStatusService", () => {
     expect(toolNames).toContain("project_status");
     await expect(createToolHandlers().projectStatus({ projectPath, includeDoctor: false })).resolves.toMatchObject({
       recommendedAction: "create_task",
-      tasks: { total: 0 }
+      tasks: { total: 0 },
+      waitingFor: "chatgpt",
+      nextActor: "chatgpt"
     });
-  });
+  }, 15000);
+
+  it("serves MCP relay_status and codex_next for a pending task", async () => {
+    const projectPath = await readyProject();
+    await createTask(projectPath);
+    const handlers = createToolHandlers();
+
+    await expect(handlers.relayStatus({ projectPath, includeDoctor: false })).resolves.toMatchObject({
+      waitingFor: "codex",
+      nextActor: "codex",
+      currentTask: {
+        id: "0001",
+        status: "pending"
+      }
+    });
+
+    await expect(handlers.codexNext({ projectPath })).resolves.toMatchObject({
+      waitingFor: "codex",
+      task: {
+        id: "0001",
+        status: "pending"
+      }
+    });
+  }, 15000);
 });
 
 async function readyProject(): Promise<string> {

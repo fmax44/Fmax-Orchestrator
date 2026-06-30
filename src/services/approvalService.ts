@@ -5,6 +5,7 @@ import { TaskStore } from "./taskStore.js";
 import { ProjectPolicyService } from "./projectPolicy.js";
 import { ReviewGateService, type ReviewGateDecision } from "./reviewGate.js";
 import { safeExec } from "../utils/safeExec.js";
+import { ensureRelativeInsideProject } from "../utils/paths.js";
 
 export interface ApprovalRequest {
   projectPath: string;
@@ -129,7 +130,7 @@ export class ApprovalService {
       };
     }
 
-    const absoluteReportPath = path.join(projectPath, provenance.reviewReportPath);
+    const absoluteReportPath = ensureRelativeInsideProject(projectPath, provenance.reviewReportPath);
     const reportContent = await readFile(absoluteReportPath, "utf8").catch(() => undefined);
     if (!reportContent) {
       return {
@@ -147,6 +148,25 @@ export class ApprovalService {
         reviewHash: provenance.reviewHash,
         reviewReportPath: provenance.reviewReportPath,
         reason: "Stored Review Gate hash does not match the review report."
+      };
+    }
+
+    if (!isReviewReportForTask(reportContent, taskId)) {
+      return {
+        decision: "BLOCKED",
+        reviewHash: provenance.reviewHash,
+        reviewReportPath: provenance.reviewReportPath,
+        reason: "Stored Review Gate report does not belong to the approved task."
+      };
+    }
+
+    const decisionInReport = readDecisionFromReviewReport(reportContent);
+    if (decisionInReport !== provenance.decision) {
+      return {
+        decision: "BLOCKED",
+        reviewHash: provenance.reviewHash,
+        reviewReportPath: provenance.reviewReportPath,
+        reason: "Stored Review Gate decision does not match the saved provenance."
       };
     }
 
@@ -198,4 +218,25 @@ export class ApprovalService {
       reason: "Stored Review Gate result is BLOCKED."
     };
   }
+}
+
+function isReviewReportForTask(markdown: string, taskId: string): boolean {
+  return new RegExp(`^# Review Gate for Task ${escapeRegExp(taskId)}\\b`, "m").test(markdown);
+}
+
+function readDecisionFromReviewReport(markdown: string): ReviewGateDecision | undefined {
+  const match = markdown.match(/^## Decision\s+([A-Z_]+)\s*$/m);
+  if (!match) {
+    return undefined;
+  }
+
+  if (match[1] === "APPROVABLE" || match[1] === "NEEDS_REVIEW" || match[1] === "BLOCKED") {
+    return match[1];
+  }
+
+  return undefined;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

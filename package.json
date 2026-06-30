@@ -15,8 +15,12 @@
     "doctor": "tsx src/cli/doctor.ts",
     "policy": "tsx src/cli/policy.ts",
     "review": "tsx src/cli/review.ts",
+    "relay:status": "tsx src/cli/relayStatus.ts",
+    "mcp:self-test": "tsx src/cli/mcpSelfTest.ts",
+    "dashboard:start": "tsx src/cli/dashboard.ts",
     "smoke": "tsx src/cli/smoke.ts",
     "status": "tsx src/cli/status.ts",
+    "codex:next": "tsx src/cli/codexNext.ts",
     "test": "vitest run",
     "lint": "eslint ."
   },

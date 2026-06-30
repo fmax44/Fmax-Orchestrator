@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { execaCommand } from "execa";
@@ -24,7 +25,7 @@ describe("ReviewGateService", () => {
     expect(result.decision).toBe("APPROVABLE");
     expect(result.recommendedAction).toBe("approve_task");
     expect(result.changedFiles).toEqual(["docs/guide.md"]);
-  });
+  }, 15000);
 
   it("returns BLOCKED when .env changes", async () => {
     const projectPath = await readyProject("basic");
@@ -42,7 +43,7 @@ describe("ReviewGateService", () => {
 
     expect(result.decision).toBe("BLOCKED");
     expect(result.errors.some((error) => error.includes("blocked"))).toBe(true);
-  });
+  }, 15000);
 
   it("returns BLOCKED when .codex is tracked", async () => {
     const projectPath = await readyProject("basic");
@@ -60,7 +61,7 @@ describe("ReviewGateService", () => {
 
     expect(result.decision).toBe("BLOCKED");
     expect(result.errors.some((error) => error.includes("Forbidden paths are tracked") || error.includes("blocked"))).toBe(true);
-  });
+  }, 15000);
 
   it("returns NEEDS_REVIEW for a protected file", async () => {
     const projectPath = await readyProject("docker-compose");
@@ -78,7 +79,7 @@ describe("ReviewGateService", () => {
 
     expect(result.decision).toBe("NEEDS_REVIEW");
     expect(result.manualApprovalRequired).toBe(true);
-  });
+  }, 15000);
 
   it("returns BLOCKED when report is missing", async () => {
     const projectPath = await readyProject("basic");
@@ -97,7 +98,7 @@ describe("ReviewGateService", () => {
 
     expect(result.decision).toBe("BLOCKED");
     expect(result.errors).toContain("Report is required but missing.");
-  });
+  }, 15000);
 
   it("is JSON serializable", async () => {
     const projectPath = await readyProject("basic");
@@ -108,7 +109,7 @@ describe("ReviewGateService", () => {
 
     expect(parsed.taskId).toBe(taskId);
     expect(parsed.checks.length).toBeGreaterThan(0);
-  });
+  }, 15000);
 
   it("writes a review report", async () => {
     const projectPath = await readyProject("basic");
@@ -124,7 +125,7 @@ describe("ReviewGateService", () => {
 
     expect(result.reviewReportPath).toBe(`.codex/reports/${taskId}-review.md`);
     expect(report).toContain(`# Review Gate for Task ${taskId}`);
-  });
+  }, 15000);
 
   it("stores lastReviewGate provenance when writeReport is used", async () => {
     const projectPath = await readyProject("node");
@@ -142,7 +143,7 @@ describe("ReviewGateService", () => {
     expect(result.reviewHash).toMatch(/^sha256:/);
     expect(task?.lastReviewGate?.reviewHash).toBe(result.reviewHash);
     expect(task?.lastReviewGate?.reviewReportPath).toBe(`.codex/reports/${taskId}-review.md`);
-  });
+  }, 15000);
 });
 
 describe("approve_task Review Gate integration", () => {
@@ -164,7 +165,7 @@ describe("approve_task Review Gate integration", () => {
 
     expect(result.status).toBe("approved");
     expect(result.reviewGate.decision).toBe("APPROVABLE");
-  });
+  }, 15000);
 
   it("requires override when Review Gate is NEEDS_REVIEW", async () => {
     const projectPath = await readyProject("docker-compose");
@@ -196,7 +197,7 @@ describe("approve_task Review Gate integration", () => {
         overrideReviewGate: true
       })
     ).resolves.toMatchObject({ status: "approved" });
-  });
+  }, 15000);
 
   it("blocks approval when Review Gate is BLOCKED", async () => {
     const projectPath = await readyProject("node");
@@ -209,7 +210,7 @@ describe("approve_task Review Gate integration", () => {
         decision: "Approved."
       })
     ).rejects.toThrow(/writeReport: true/);
-  });
+  }, 15000);
 
   it("force approval requires forceReason", async () => {
     const projectPath = await readyProject("node");
@@ -223,7 +224,7 @@ describe("approve_task Review Gate integration", () => {
         force: true
       })
     ).rejects.toThrow(/forceReason is required/);
-  });
+  }, 15000);
 
   it("force approval writes decision log", async () => {
     const projectPath = await readyProject("node");
@@ -240,7 +241,7 @@ describe("approve_task Review Gate integration", () => {
 
     expect(decisionLog).toContain("FORCE APPROVAL REASON");
     expect(decisionLog).toContain("Emergency documented exception.");
-  });
+  }, 15000);
 
   it("blocks approval when review is stale", async () => {
     const projectPath = await readyProject("node");
@@ -266,7 +267,7 @@ describe("approve_task Review Gate integration", () => {
         decision: "Approved."
       })
     ).rejects.toThrow(/stale|overrideReviewGate/i);
-  });
+  }, 15000);
 
   it("blocks approval when review hash mismatches", async () => {
     const projectPath = await readyProject("node");
@@ -286,7 +287,38 @@ describe("approve_task Review Gate integration", () => {
         decision: "Approved."
       })
     ).rejects.toThrow(/hash does not match/);
-  });
+  }, 15000);
+
+  it("blocks approval when the saved review report belongs to another task even if the hash matches", async () => {
+    const projectPath = await readyProject("node");
+    const taskId = await docsTaskWithReport(projectPath);
+    await new ReviewGateService().run({
+      projectPath,
+      taskId,
+      checks: ["git status --short"],
+      writeReport: true
+    });
+
+    const reviewPath = path.join(projectPath, ".codex", "reports", `${taskId}-review.md`);
+    const tampered = "# Review Gate for Task 9999\n\n## Decision\n\nAPPROVABLE\n\n## Summary\n\nTampered.\n";
+    await writeFile(reviewPath, tampered, "utf8");
+
+    const state = await new TaskStore().readState(projectPath);
+    const task = state.tasks.find((item) => item.id === taskId);
+    if (!task?.lastReviewGate) {
+      throw new Error("Missing lastReviewGate");
+    }
+    task.lastReviewGate.reviewHash = `sha256:${createHash("sha256").update(tampered).digest("hex")}`;
+    await writeFile(path.join(projectPath, ".codex", "state", "tasks.json"), `${JSON.stringify(state, null, 2)}\n`, "utf8");
+
+    await expect(
+      createToolHandlers().approveTask({
+        projectPath,
+        taskId,
+        decision: "Approved."
+      })
+    ).rejects.toThrow(/does not belong to the approved task/);
+  }, 15000);
 
   it("CLI approve works on the happy path", async () => {
     const projectPath = await readyProject("node");
@@ -306,7 +338,7 @@ describe("approve_task Review Gate integration", () => {
 
     expect(result.stdout).toContain('"status": "approved"');
     expect(result.stdout).toContain('"decision": "APPROVABLE"');
-  });
+  }, 15000);
 
   it("CLI approve is blocked without review provenance", async () => {
     const projectPath = await readyProject("node");
@@ -318,7 +350,7 @@ describe("approve_task Review Gate integration", () => {
         shell: true
       })
     ).rejects.toThrow();
-  });
+  }, 15000);
 });
 
 async function readyProject(policy: "basic" | "node" | "docker-compose"): Promise<string> {

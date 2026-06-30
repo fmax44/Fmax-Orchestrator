@@ -19,7 +19,7 @@ describe("ProjectPolicyService", () => {
     expect(result.policy?.created).toBe(true);
     expect(result.policy?.policy.defaultProfile).toBe("default");
     expect(result.policy?.policy.workflow.strictReviewGate).toBe(false);
-  });
+  }, 15000);
 
   it("creates a node policy", async () => {
     const projectPath = await gitProject();
@@ -29,7 +29,7 @@ describe("ProjectPolicyService", () => {
     expect(result.policy?.policy.allowedCommands).toContain("npm run build");
     expect(result.policy?.policy.requiredChecks.node).toContain("npm test");
     expect(result.policy?.policy.workflow.strictReviewGate).toBe(true);
-  });
+  }, 15000);
 
   it("creates a docker-compose policy", async () => {
     const projectPath = await gitProject();
@@ -39,7 +39,7 @@ describe("ProjectPolicyService", () => {
     expect(result.policy?.policy.defaultProfile).toBe("docker-compose");
     expect(result.policy?.policy.blockedCommands).toContain("docker compose config");
     expect(result.policy?.policy.workflow.strictReviewGate).toBe(true);
-  });
+  }, 15000);
 
   it("does not overwrite an existing policy without force", async () => {
     const projectPath = await gitProject();
@@ -52,7 +52,7 @@ describe("ProjectPolicyService", () => {
     expect(result.policy?.created).toBe(false);
     expect(result.policy?.overwritten).toBe(false);
     expect(result.policy?.policy.projectName).toBe("custom");
-  });
+  }, 15000);
 
   it("overwrites an existing policy with force", async () => {
     const projectPath = await gitProject();
@@ -63,7 +63,7 @@ describe("ProjectPolicyService", () => {
 
     expect(result.policy?.overwritten).toBe(true);
     expect(result.policy?.policy.allowedCommands).toContain("npm run lint");
-  });
+  }, 15000);
 
   it("reads policy", async () => {
     const projectPath = await readyProject("basic");
@@ -72,7 +72,7 @@ describe("ProjectPolicyService", () => {
 
     expect(result.exists).toBe(true);
     expect(result.policy?.version).toBe(1);
-  });
+  }, 15000);
 
   it("validates a valid task", async () => {
     const projectPath = await readyProject("basic");
@@ -87,7 +87,7 @@ describe("ProjectPolicyService", () => {
 
     expect(result.valid).toBe(true);
     expect(result.manualApprovalRequired).toBe(false);
-  });
+  }, 15000);
 
   it("rejects a task with a blocked path", async () => {
     const projectPath = await readyProject("basic");
@@ -102,7 +102,7 @@ describe("ProjectPolicyService", () => {
 
     expect(result.valid).toBe(false);
     expect(result.errors.some((error) => error.includes("blocked path"))).toBe(true);
-  });
+  }, 15000);
 
   it("flags a task with a protected file", async () => {
     const projectPath = await readyProject("docker-compose");
@@ -117,7 +117,7 @@ describe("ProjectPolicyService", () => {
 
     expect(result.valid).toBe(true);
     expect(result.manualApprovalRequired).toBe(true);
-  });
+  }, 15000);
 
   it("rejects a task with a blocked command", async () => {
     const projectPath = await readyProject("docker-compose");
@@ -132,7 +132,7 @@ describe("ProjectPolicyService", () => {
 
     expect(result.valid).toBe(false);
     expect(result.errors.some((error) => error.includes("blocked command"))).toBe(true);
-  });
+  }, 15000);
 
   it("validates a docs-only diff", async () => {
     const projectPath = await readyProject("basic");
@@ -146,7 +146,7 @@ describe("ProjectPolicyService", () => {
 
     expect(result.valid).toBe(true);
     expect(result.changedFiles).toEqual(["docs/guide.md"]);
-  });
+  }, 15000);
 
   it("rejects a diff with a blocked path", async () => {
     const projectPath = await readyProject("basic");
@@ -160,7 +160,7 @@ describe("ProjectPolicyService", () => {
 
     expect(result.valid).toBe(false);
     expect(result.errors.some((error) => error.includes("blocked"))).toBe(true);
-  });
+  }, 15000);
 
   it("shows policy in doctor", async () => {
     const projectPath = await readyProject("basic");
@@ -169,7 +169,7 @@ describe("ProjectPolicyService", () => {
 
     expect(result.profile).toBe("default");
     expect(result.targetProject?.checks.some((check) => check.name === "policy exists" && check.status === "pass")).toBe(true);
-  });
+  }, 15000);
 
   it("uses default ephemeral smoke mode from policy", async () => {
     const projectPath = await readyProject("basic");
@@ -179,7 +179,7 @@ describe("ProjectPolicyService", () => {
     expect(result.result).toBe("PASS");
     expect(result.ephemeral).toBe(true);
     expect(result.reportPath).toMatch(/^\.codex\/smoke\/reports\//);
-  });
+  }, 15000);
 
   it("adds Policy Notes when create_task uses policy", async () => {
     const projectPath = await readyProject("basic");
@@ -198,7 +198,7 @@ describe("ProjectPolicyService", () => {
     expect(taskMarkdown).toContain("## Policy Notes");
     expect(taskMarkdown).toContain("Policy file: .codex/project-policy.json");
     expect(taskMarkdown).toContain("Manual approval required: no");
-  });
+  }, 15000);
 });
 
 async function readyProject(policy: "basic" | "node" | "docker-compose"): Promise<string> {

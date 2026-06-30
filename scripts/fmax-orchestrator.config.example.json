@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "dashboardPort": 47821,
+  "refreshIntervalSeconds": 20,
+  "publicIpLookupUrl": "https://api.ipify.org?format=json",
+  "publicIpGeoLookupUrlTemplate": "https://ipwho.is/{ip}",
+  "publicIpTimeoutMs": 2500,
+  "apps": {
+    "chatgptUrl": "https://chatgpt.com/",
+    "codexPath": "C:/Users/fmax/AppData/Local/Programs/Codex/Codex.exe",
+    "vpnPath": "C:/Program Files/Incy VPN/IncyVPN.exe"
+  },
+  "commands": {
+    "mcpServer": {
+      "label": "Start MCP server",
+      "command": "npm.cmd",
+      "args": ["run", "dev"],
+      "cwd": "D:/projects/chatgpt-codex-mcp"
+    },
+    "tunnel": {
+      "label": "Start tunnel",
+      "command": "D:/projects/chatgpt-codex-mcp/tunnel-client.exe",
+      "args": ["run", "--profile", "local-stdio"],
+      "cwd": "D:/projects/chatgpt-codex-mcp",
+      "env": {
+        "CODEX_MCP_DEFAULT_PROJECT": "D:/projects/orchestrator-product-trial",
+        "CONTROL_PLANE_API_KEY": "SET_AT_RUNTIME"
+      }
+    }
+  },
+  "health": {
+    "tunnelHealthUrl": "http://127.0.0.1:8080/healthz",
+    "tunnelReadyUrl": "http://127.0.0.1:8080/readyz"
+  },
+  "managedProjects": [
+    {
+      "name": "chatgpt-codex-mcp",
+      "path": "D:/projects/chatgpt-codex-mcp"
+    },
+    {
+      "name": "orchestrator-product-trial",
+      "path": "D:/projects/orchestrator-product-trial"
+    }
+  ]
+}

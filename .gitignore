@@ -4,3 +4,8 @@ dist/
 .codex/
 coverage/
 *.log
+tunnel-client.exe
+tunnel-client-*.exe
+tunnel-client-*/
+scripts/fmax-orchestrator.config.local.json
+scripts/fmax-orchestrator-dashboard.pid

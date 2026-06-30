@@ -7,6 +7,8 @@ export const toolNames = [
   "approve_task",
   "reject_task",
   "create_next_task",
+  "relay_status",
+  "codex_next",
   "project_health",
   "list_tasks",
   "archive_task",

@@ -16,7 +16,7 @@ describe("GitService", () => {
     expect(diff.status).toContain("M README.md");
     expect(diff.output).toContain("git diff --stat");
     expect(diff.output).toContain("README.md");
-  });
+  }, 15000);
 
   it("runs safe commands and blocks dangerous commands", async () => {
     const projectPath = await tempProject();

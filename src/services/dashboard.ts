@@ -1,0 +1,701 @@
+import os from "node:os";
+import path from "node:path";
+import { ProjectStatusService, type ProjectStatusResult } from "./projectStatus.js";
+import type { DashboardCommandConfig, DashboardConfig } from "./dashboardConfig.js";
+
+export type DashboardComponentState = "online" | "degraded" | "offline" | "manual";
+
+export interface DashboardComponentStatus {
+  name: string;
+  state: DashboardComponentState;
+  details: string;
+  actionLabel?: string;
+}
+
+export interface DashboardProjectCard {
+  name: string;
+  path: string;
+  ok: boolean;
+  summary: string;
+  waitingFor?: string;
+  nextActor?: string;
+  nextAction?: string;
+  recommendedAction?: string;
+  doctorResult?: string;
+  gitStatus?: string;
+  currentTask?: string;
+  errors: string[];
+  warnings: string[];
+}
+
+export interface DashboardIpInfo {
+  local: string[];
+  publicIp?: string;
+  publicIpStatus: "available" | "unavailable";
+  publicIpDetails: string;
+  city?: string;
+  country?: string;
+  geoStatus: "available" | "unavailable";
+  geoDetails: string;
+}
+
+export interface DashboardSnapshot {
+  generatedAt: string;
+  orchestratorRoot: string;
+  configPath: string;
+  configExists: boolean;
+  components: {
+    mcpServer: DashboardComponentStatus;
+    tunnel: DashboardComponentStatus;
+  };
+  ips: DashboardIpInfo;
+  projects: DashboardProjectCard[];
+  actions: Array<{
+    id: DashboardActionId;
+    label: string;
+    enabled: boolean;
+    reason?: string;
+  }>;
+}
+
+export type DashboardActionId =
+  | "open-chatgpt"
+  | "open-codex"
+  | "open-vpn"
+  | "start-mcp"
+  | "start-tunnel"
+  | "open-config";
+
+export interface DashboardCollectOptions {
+  orchestratorRoot: string;
+  configPath: string;
+  configExists: boolean;
+  config: DashboardConfig;
+}
+
+export interface DashboardDependencies {
+  fetchImpl?: typeof fetch;
+  projectStatusService?: Pick<ProjectStatusService, "check">;
+}
+
+const RU = {
+  heroEyebrow: "Локальный dashboard Fmax-Orchestrator",
+  heroTitle: "Запуск сервисов, relay-статус, IP и здоровье проектов в одном окне",
+  refreshPrefix: "Автообновление каждые",
+  refreshSuffix: "сек. Обновлено:",
+  localConfig: "Локальный config",
+  configLoaded: "Локальный override подключён.",
+  configMissing:
+    "Сейчас используются значения по умолчанию. Создайте local config для путей Codex, VPN и команд запуска tunnel.",
+  ipBlock: "IP и геолокация",
+  localIpv4: "Локальные IPv4",
+  publicIp: "Публичный IP",
+  city: "Город",
+  country: "Страна",
+  cityMissing: "не определён",
+  countryMissing: "не определена",
+  notDetected: "не определены",
+  unavailable: "недоступен",
+  managedProjects: "Управляемые проекты",
+  actionAvailable: "Доступное действие",
+  projectReady: "ГОТОВ К ПРОВЕРКЕ",
+  projectFailed: "ПРОВЕРКА НЕ ПРОШЛА",
+  currentTask: "Текущая задача",
+  doctor: "Doctor",
+  git: "Git",
+  waitingFor: "Ожидание",
+  nextActor: "Следующий исполнитель",
+  recommendedAction: "Рекомендуемое действие",
+  nextStep: "Следующий шаг",
+  warning: "Предупреждение",
+  error: "Ошибка",
+  openVpn: "Открыть VPN",
+  startTunnel: "Запустить Tunnel",
+  startMcp: "Запустить MCP",
+  openChatgpt: "Открыть ChatGPT",
+  openCodex: "Открыть Codex",
+  openConfig: "Открыть конфиг"
+} as const;
+
+export class DashboardService {
+  private readonly fetchImpl: typeof fetch;
+  private readonly projectStatusService: Pick<ProjectStatusService, "check">;
+
+  constructor(dependencies: DashboardDependencies = {}) {
+    this.fetchImpl = dependencies.fetchImpl ?? fetch;
+    this.projectStatusService = dependencies.projectStatusService ?? new ProjectStatusService();
+  }
+
+  async collect(options: DashboardCollectOptions): Promise<DashboardSnapshot> {
+    const [mcpServer, tunnel, ips, projects] = await Promise.all([
+      this.readMcpStatus(options.config),
+      this.readTunnelStatus(options.config),
+      this.readIpInfo(options.config),
+      this.readProjects(options.config)
+    ]);
+
+    return {
+      generatedAt: new Date().toISOString(),
+      orchestratorRoot: path.resolve(options.orchestratorRoot),
+      configPath: options.configPath,
+      configExists: options.configExists,
+      components: {
+        mcpServer,
+        tunnel
+      },
+      ips,
+      projects,
+      actions: buildActions(options.config)
+    };
+  }
+
+  async readPublicIp(config: DashboardConfig): Promise<DashboardIpInfo["publicIp"] | undefined> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), config.publicIpTimeoutMs);
+
+    try {
+      const response = await this.fetchImpl(config.publicIpLookupUrl, {
+        signal: controller.signal,
+        headers: { accept: "application/json" }
+      });
+      if (!response.ok) {
+        return undefined;
+      }
+
+      const body = await response.json() as { ip?: string };
+      return body.ip?.trim() || undefined;
+    } catch {
+      return undefined;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  async readPublicIpGeo(
+    config: DashboardConfig,
+    ip: string | undefined
+  ): Promise<{ city?: string; country?: string; geoStatus: DashboardIpInfo["geoStatus"]; geoDetails: string }> {
+    if (!ip) {
+      return {
+        geoStatus: "unavailable",
+        geoDetails:
+          "\u0413\u0435\u043e\u043b\u043e\u043a\u0430\u0446\u0438\u044f \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430, \u043f\u043e\u0442\u043e\u043c\u0443 \u0447\u0442\u043e \u043f\u0443\u0431\u043b\u0438\u0447\u043d\u044b\u0439 IP \u043d\u0435 \u043e\u043f\u0440\u0435\u0434\u0435\u043b\u0451\u043d."
+      };
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), config.publicIpTimeoutMs);
+    const url = config.publicIpGeoLookupUrlTemplate.replace("{ip}", encodeURIComponent(ip));
+
+    try {
+      const response = await this.fetchImpl(url, {
+        signal: controller.signal,
+        headers: { accept: "application/json" }
+      });
+
+      if (!response.ok) {
+        return {
+          geoStatus: "unavailable",
+          geoDetails: "\u0413\u0435\u043e\u043b\u043e\u043a\u0430\u0446\u0438\u044f \u043d\u0435 \u043e\u0442\u0432\u0435\u0442\u0438\u043b\u0430 \u0443\u0441\u043f\u0435\u0448\u043d\u043e."
+        };
+      }
+
+      const body = await response.json() as { success?: boolean; city?: string; country?: string };
+      if (body.success === false) {
+        return {
+          geoStatus: "unavailable",
+          geoDetails:
+            "\u0413\u0435\u043e\u043b\u043e\u043a\u0430\u0446\u0438\u044f \u0432\u0435\u0440\u043d\u0443\u043b\u0430 \u043e\u0442\u043a\u0430\u0437 \u0438\u043b\u0438 \u043d\u0435\u043f\u043e\u043b\u043d\u044b\u0435 \u0434\u0430\u043d\u043d\u044b\u0435."
+        };
+      }
+
+      const city = body.city?.trim();
+      const country = body.country?.trim();
+      if (!city && !country) {
+        return {
+          geoStatus: "unavailable",
+          geoDetails: "\u0413\u043e\u0440\u043e\u0434 \u0438 \u0441\u0442\u0440\u0430\u043d\u0430 \u043d\u0435 \u043e\u043f\u0440\u0435\u0434\u0435\u043b\u0435\u043d\u044b."
+        };
+      }
+
+      return {
+        city,
+        country,
+        geoStatus: "available",
+        geoDetails: "\u0413\u0435\u043e\u043b\u043e\u043a\u0430\u0446\u0438\u044f \u043e\u043f\u0440\u0435\u0434\u0435\u043b\u0435\u043d\u0430 \u043f\u043e \u043f\u0443\u0431\u043b\u0438\u0447\u043d\u043e\u043c\u0443 IP."
+      };
+    } catch {
+      return {
+        geoStatus: "unavailable",
+        geoDetails:
+          "\u0413\u0435\u043e\u043b\u043e\u043a\u0430\u0446\u0438\u044f \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 \u043f\u043e \u0442\u0430\u0439\u043c\u0430\u0443\u0442\u0443, \u043e\u0444\u043b\u0430\u0439\u043d \u0438\u043b\u0438 \u0447\u0435\u0440\u0435\u0437 VPN."
+      };
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private async readProjects(config: DashboardConfig): Promise<DashboardProjectCard[]> {
+    return Promise.all(
+      config.managedProjects.map(async (project) => {
+        try {
+          const status = await this.projectStatusService.check({
+            projectPath: project.path,
+            includeDoctor: true,
+            includeReview: true
+          });
+          return mapProjectStatus(project.name, status);
+        } catch (error: unknown) {
+          const message = error instanceof Error ? error.message : String(error);
+          return {
+            name: project.name,
+            path: project.path,
+            ok: false,
+            summary: "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u043e\u043b\u0443\u0447\u0438\u0442\u044c \u0441\u0442\u0430\u0442\u0443\u0441 \u043f\u0440\u043e\u0435\u043a\u0442\u0430.",
+            errors: [message],
+            warnings: []
+          };
+        }
+      })
+    );
+  }
+
+  private async readIpInfo(config: DashboardConfig): Promise<DashboardIpInfo> {
+    const local = getLocalIpv4Addresses();
+    const publicIp = await this.readPublicIp(config);
+    const geo = await this.readPublicIpGeo(config, publicIp);
+
+    return {
+      local,
+      publicIp,
+      publicIpStatus: publicIp ? "available" : "unavailable",
+      publicIpDetails: publicIp
+        ? "\u041f\u0443\u0431\u043b\u0438\u0447\u043d\u044b\u0439 IP \u043e\u043f\u0440\u0435\u0434\u0435\u043b\u0451\u043d."
+        : "\u041f\u0443\u0431\u043b\u0438\u0447\u043d\u044b\u0439 IP \u043d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u043f\u0440\u0435\u0434\u0435\u043b\u0438\u0442\u044c: \u0442\u0430\u0439\u043c\u0430\u0443\u0442, \u043e\u0444\u043b\u0430\u0439\u043d \u0438\u043b\u0438 \u043e\u0442\u0441\u0443\u0442\u0441\u0442\u0432\u0438\u0435 \u043e\u0442\u0432\u0435\u0442\u0430.",
+      city: geo.city,
+      country: geo.country,
+      geoStatus: geo.geoStatus,
+      geoDetails: geo.geoDetails
+    };
+  }
+
+  private async readMcpStatus(config: DashboardConfig): Promise<DashboardComponentStatus> {
+    if (!config.health.mcpHealthUrl) {
+      return {
+        name: "MCP",
+        state: config.commands.mcpServer ? "manual" : "offline",
+        details: config.commands.mcpServer
+          ? "\u041a\u043e\u043c\u0430\u043d\u0434\u0430 \u0437\u0430\u043f\u0443\u0441\u043a\u0430 \u043d\u0430\u0441\u0442\u0440\u043e\u0435\u043d\u0430. \u0414\u043b\u044f stdio MCP-\u0441\u0435\u0440\u0432\u0435\u0440\u0430 \u043d\u0435 \u0437\u0430\u0434\u0430\u043d \u043e\u0442\u0434\u0435\u043b\u044c\u043d\u044b\u0439 HTTP health-check."
+          : "\u041d\u0435 \u043d\u0430\u0441\u0442\u0440\u043e\u0435\u043d\u044b \u043d\u0438 \u043a\u043e\u043c\u0430\u043d\u0434\u0430 \u0437\u0430\u043f\u0443\u0441\u043a\u0430 MCP, \u043d\u0438 health-check.",
+        actionLabel: RU.startMcp
+      };
+    }
+
+    const probe = await probeUrl(this.fetchImpl, config.health.mcpHealthUrl, config.publicIpTimeoutMs);
+    return {
+      name: "MCP",
+      state: probe.ok ? "online" : "offline",
+      details: probe.ok
+        ? `\u0421\u0435\u0440\u0432\u0438\u0441 \u043e\u0442\u0432\u0435\u0447\u0430\u0435\u0442 \u043f\u043e ${config.health.mcpHealthUrl}`
+        : `\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430 health \u043d\u0435 \u043f\u0440\u043e\u0448\u043b\u0430 \u043f\u043e ${config.health.mcpHealthUrl}`,
+      actionLabel: RU.startMcp
+    };
+  }
+
+  private async readTunnelStatus(config: DashboardConfig): Promise<DashboardComponentStatus> {
+    const [health, ready] = await Promise.all([
+      probeUrl(this.fetchImpl, config.health.tunnelHealthUrl, config.publicIpTimeoutMs),
+      probeUrl(this.fetchImpl, config.health.tunnelReadyUrl, config.publicIpTimeoutMs)
+    ]);
+
+    if (health.ok && ready.ok) {
+      return {
+        name: "Tunnel",
+        state: "online",
+        details: `Tunnel \u043e\u0442\u0432\u0435\u0447\u0430\u0435\u0442 \u0438 \u0433\u043e\u0442\u043e\u0432 \u043f\u043e ${config.health.tunnelHealthUrl} / ${config.health.tunnelReadyUrl}`,
+        actionLabel: RU.startTunnel
+      };
+    }
+
+    if (health.ok && !ready.ok) {
+      return {
+        name: "Tunnel",
+        state: "degraded",
+        details: `healthz \u043e\u0442\u0432\u0435\u0447\u0430\u0435\u0442, \u043d\u043e readyz \u0435\u0449\u0451 \u043d\u0435 \u0433\u043e\u0442\u043e\u0432 \u043f\u043e ${config.health.tunnelReadyUrl}`,
+        actionLabel: RU.startTunnel
+      };
+    }
+
+    return {
+      name: "Tunnel",
+      state: config.commands.tunnel ? "offline" : "manual",
+      details: config.commands.tunnel
+        ? `\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430 tunnel \u043d\u0435 \u043f\u0440\u043e\u0448\u043b\u0430 \u043f\u043e ${config.health.tunnelHealthUrl}. \u0418\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u0439\u0442\u0435 \u043a\u043d\u043e\u043f\u043a\u0443 \u0437\u0430\u043f\u0443\u0441\u043a\u0430.`
+        : `\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430 tunnel \u043d\u0435 \u043f\u0440\u043e\u0448\u043b\u0430 \u043f\u043e ${config.health.tunnelHealthUrl}. \u0414\u043e\u0431\u0430\u0432\u044c\u0442\u0435 \u043a\u043e\u043c\u0430\u043d\u0434\u0443 tunnel \u0432 \u043b\u043e\u043a\u0430\u043b\u044c\u043d\u044b\u0439 config \u0434\u043b\u044f \u0437\u0430\u043f\u0443\u0441\u043a\u0430 \u0432 \u043e\u0434\u0438\u043d \u043a\u043b\u0438\u043a.`,
+      actionLabel: RU.startTunnel
+    };
+  }
+}
+
+export function renderDashboardHtml(snapshot: DashboardSnapshot, config: DashboardConfig): string {
+  const refreshSeconds = Math.max(10, config.refreshIntervalSeconds);
+  return `<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="refresh" content="${refreshSeconds}" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Fmax-Orchestrator Dashboard</title>
+  <style>
+    :root {
+      --bg: #f4efe7;
+      --card: #fffaf2;
+      --ink: #1d1d1b;
+      --muted: #645d55;
+      --line: #dbcdb8;
+      --accent: #22543d;
+      --warn: #a85d16;
+      --bad: #9b2226;
+      --shadow: 0 18px 40px rgba(58, 42, 25, 0.08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "Trebuchet MS", sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(255,255,255,0.9), transparent 28%),
+        linear-gradient(135deg, #efe4d2 0%, var(--bg) 55%, #e9dcc6 100%);
+      color: var(--ink);
+    }
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 28px 20px 48px;
+    }
+    h1, h2, h3, p { margin-top: 0; }
+    .hero, .card {
+      background: rgba(255,250,242,0.92);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      box-shadow: var(--shadow);
+    }
+    .hero { padding: 26px; margin-bottom: 20px; }
+    .hero-grid, .actions, .component-grid, .project-grid {
+      display: grid;
+      gap: 16px;
+    }
+    .hero-grid { grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
+    .actions { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); margin: 18px 0 6px; }
+    .component-grid, .project-grid { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+    .card { padding: 18px; }
+    .eyebrow, .muted { color: var(--muted); font-size: 14px; }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+    .online { background: #d8f3dc; color: var(--accent); }
+    .degraded { background: #fff1c9; color: var(--warn); }
+    .offline { background: #ffd9d9; color: var(--bad); }
+    .manual { background: #ece7df; color: #4f4a44; }
+    .action-form { margin: 0; }
+    button {
+      width: 100%;
+      border: 0;
+      border-radius: 16px;
+      padding: 13px 16px;
+      background: #1d3557;
+      color: white;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button[disabled] {
+      background: #b7b7b7;
+      cursor: not-allowed;
+    }
+    code {
+      font-family: "Cascadia Code", "Consolas", monospace;
+      font-size: 13px;
+      background: rgba(34, 84, 61, 0.08);
+      padding: 1px 6px;
+      border-radius: 7px;
+    }
+    ul.meta {
+      list-style: none;
+      padding: 0;
+      margin: 12px 0 0;
+      display: grid;
+      gap: 8px;
+    }
+    .card h3 { margin-bottom: 10px; }
+    .project-grid .card { min-height: 260px; }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <div class="hero-grid">
+        <div>
+          <p class="eyebrow">${RU.heroEyebrow}</p>
+          <h1>${RU.heroTitle}</h1>
+          <p class="muted">${RU.refreshPrefix} ${refreshSeconds} ${RU.refreshSuffix} ${escapeHtml(snapshot.generatedAt)}.</p>
+        </div>
+        <div>
+          <p class="eyebrow">${RU.localConfig}</p>
+          <p><code>${escapeHtml(snapshot.configPath)}</code></p>
+          <p class="muted">${snapshot.configExists ? RU.configLoaded : RU.configMissing}</p>
+        </div>
+        <div>
+          <p class="eyebrow">${RU.ipBlock}</p>
+          <ul class="meta">
+            <li>${RU.localIpv4}: ${escapeHtml(snapshot.ips.local.join(", ") || RU.notDetected)}</li>
+            <li>${RU.publicIp}: ${escapeHtml(snapshot.ips.publicIp ?? RU.unavailable)}</li>
+            <li>${RU.city}: ${escapeHtml(snapshot.ips.city ?? RU.cityMissing)}</li>
+            <li>${RU.country}: ${escapeHtml(snapshot.ips.country ?? RU.countryMissing)}</li>
+            <li class="muted">${escapeHtml(snapshot.ips.publicIpDetails)}</li>
+            <li class="muted">${escapeHtml(snapshot.ips.geoDetails)}</li>
+          </ul>
+        </div>
+      </div>
+      <div class="actions">
+        ${snapshot.actions.map((action) => renderActionButton(action)).join("")}
+      </div>
+    </section>
+    <section class="component-grid">
+      ${renderComponentCard(snapshot.components.mcpServer)}
+      ${renderComponentCard(snapshot.components.tunnel)}
+    </section>
+    <section>
+      <h2>${RU.managedProjects}</h2>
+      <div class="project-grid">
+        ${snapshot.projects.map(renderProjectCard).join("")}
+      </div>
+    </section>
+  </main>
+</body>
+</html>`;
+}
+
+function renderActionButton(action: DashboardSnapshot["actions"][number]): string {
+  return `<form class="action-form" method="POST" action="/action/${encodeURIComponent(action.id)}">
+    <button ${action.enabled ? "" : "disabled"} title="${escapeHtml(action.reason ?? "")}">${escapeHtml(action.label)}</button>
+  </form>`;
+}
+
+function renderComponentCard(component: DashboardComponentStatus): string {
+  return `<article class="card">
+    <p class="pill ${component.state}">${escapeHtml(localizeComponentState(component.state))}</p>
+    <h3>${escapeHtml(component.name)}</h3>
+    <p>${escapeHtml(component.details)}</p>
+    ${component.actionLabel ? `<p class="muted">${RU.actionAvailable}: ${escapeHtml(component.actionLabel)}</p>` : ""}
+  </article>`;
+}
+
+function renderProjectCard(project: DashboardProjectCard): string {
+  return `<article class="card">
+    <p class="pill ${project.ok ? "online" : "offline"}">${escapeHtml(project.ok ? RU.projectReady : RU.projectFailed)}</p>
+    <h3>${escapeHtml(project.name)}</h3>
+    <p><code>${escapeHtml(project.path)}</code></p>
+    <p>${escapeHtml(project.summary)}</p>
+    <ul class="meta">
+      ${project.currentTask ? `<li>${RU.currentTask}: ${escapeHtml(project.currentTask)}</li>` : ""}
+      ${project.doctorResult ? `<li>${RU.doctor}: ${escapeHtml(localizeDoctorResult(project.doctorResult))} (${escapeHtml(project.doctorResult)})</li>` : ""}
+      ${project.gitStatus ? `<li>${RU.git}: ${escapeHtml(localizeGitStatus(project.gitStatus))} (${escapeHtml(project.gitStatus)})</li>` : ""}
+      ${project.waitingFor ? `<li>${RU.waitingFor}: ${escapeHtml(localizeRelayValue(project.waitingFor))} (${escapeHtml(project.waitingFor)})</li>` : ""}
+      ${project.nextActor ? `<li>${RU.nextActor}: ${escapeHtml(localizeRelayValue(project.nextActor))} (${escapeHtml(project.nextActor)})</li>` : ""}
+      ${project.recommendedAction ? `<li>${RU.recommendedAction}: ${escapeHtml(localizeRecommendedAction(project.recommendedAction))} (${escapeHtml(project.recommendedAction)})</li>` : ""}
+      ${project.nextAction ? `<li>${RU.nextStep}: ${escapeHtml(project.nextAction)}</li>` : ""}
+      ${project.warnings.map((warning) => `<li class="muted">${RU.warning}: ${escapeHtml(warning)}</li>`).join("")}
+      ${project.errors.map((error) => `<li class="muted">${RU.error}: ${escapeHtml(error)}</li>`).join("")}
+    </ul>
+  </article>`;
+}
+
+function buildActions(config: DashboardConfig): DashboardSnapshot["actions"] {
+  return [
+    {
+      id: "open-vpn",
+      label: RU.openVpn,
+      enabled: Boolean(config.apps.vpnPath),
+      reason: "\u0423\u043a\u0430\u0436\u0438\u0442\u0435 apps.vpnPath \u0432 scripts/fmax-orchestrator.config.local.json"
+    },
+    {
+      id: "start-tunnel",
+      label: RU.startTunnel,
+      enabled: Boolean(config.commands.tunnel),
+      reason: "\u0423\u043a\u0430\u0436\u0438\u0442\u0435 commands.tunnel \u0432 local config"
+    },
+    {
+      id: "start-mcp",
+      label: RU.startMcp,
+      enabled: Boolean(config.commands.mcpServer),
+      reason: "\u0423\u043a\u0430\u0436\u0438\u0442\u0435 commands.mcpServer \u0432 local config"
+    },
+    {
+      id: "open-chatgpt",
+      label: RU.openChatgpt,
+      enabled: Boolean(config.apps.chatgptUrl)
+    },
+    {
+      id: "open-codex",
+      label: RU.openCodex,
+      enabled: Boolean(config.apps.codexPath),
+      reason: "\u0423\u043a\u0430\u0436\u0438\u0442\u0435 apps.codexPath \u0432 scripts/fmax-orchestrator.config.local.json"
+    },
+    {
+      id: "open-config",
+      label: RU.openConfig,
+      enabled: true
+    }
+  ];
+}
+
+function mapProjectStatus(name: string, status: ProjectStatusResult): DashboardProjectCard {
+  return {
+    name,
+    path: status.projectPath,
+    ok: status.errors.length === 0,
+    summary: status.currentTask
+      ? `${status.currentTask.id}: ${localizeTaskStatus(status.currentTask.status)}; ${localizeNextActionText(status.nextAction)}`
+      : `\u0421\u043b\u0435\u0434\u0443\u044e\u0449\u0438\u0439 \u0448\u0430\u0433: ${localizeNextActionText(status.nextAction)}`,
+    waitingFor: status.waitingFor,
+    nextActor: status.nextActor,
+    nextAction: localizeNextActionText(status.nextAction),
+    recommendedAction: status.recommendedAction,
+    doctorResult: status.doctor?.result,
+    gitStatus: status.git.status,
+    currentTask: status.currentTask ? `${status.currentTask.id} - ${status.currentTask.title}` : undefined,
+    errors: status.errors,
+    warnings: status.warnings
+  };
+}
+
+function localizeComponentState(state: DashboardComponentState): string {
+  return ({
+    online: "\u041e\u041d\u041b\u0410\u0419\u041d",
+    degraded: "\u0427\u0410\u0421\u0422\u0418\u0427\u041d\u041e",
+    offline: "\u041d\u0415 \u0412 \u0421\u0415\u0422\u0418",
+    manual: "\u0420\u0423\u0427\u041d\u041e\u0419"
+  } as Record<DashboardComponentState, string>)[state];
+}
+
+function localizeTaskStatus(status: string): string {
+  return ({
+    pending: "\u043e\u0436\u0438\u0434\u0430\u0435\u0442 \u0432\u044b\u043f\u043e\u043b\u043d\u0435\u043d\u0438\u044f",
+    reported: "\u043e\u0442\u0447\u0451\u0442 \u0433\u043e\u0442\u043e\u0432",
+    approved: "\u043e\u0434\u043e\u0431\u0440\u0435\u043d\u0430",
+    rejected: "\u043e\u0442\u043a\u043b\u043e\u043d\u0435\u043d\u0430",
+    archived: "\u0432 \u0430\u0440\u0445\u0438\u0432\u0435"
+  } as Record<string, string>)[status] ?? status;
+}
+
+function localizeDoctorResult(value: string): string {
+  return ({
+    READY: "\u0433\u043e\u0442\u043e\u0432\u043e",
+    READY_WITH_WARNINGS: "\u0433\u043e\u0442\u043e\u0432\u043e \u0441 \u043f\u0440\u0435\u0434\u0443\u043f\u0440\u0435\u0436\u0434\u0435\u043d\u0438\u044f\u043c\u0438",
+    NOT_READY: "\u043d\u0435 \u0433\u043e\u0442\u043e\u0432\u043e"
+  } as Record<string, string>)[value] ?? value;
+}
+
+function localizeGitStatus(value: string): string {
+  return ({
+    clean: "\u0447\u0438\u0441\u0442\u043e",
+    dirty: "\u0435\u0441\u0442\u044c \u0438\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u044f",
+    unknown: "\u043d\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u043e"
+  } as Record<string, string>)[value] ?? value;
+}
+
+function localizeRelayValue(value: string): string {
+  return ({
+    user: "\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c",
+    chatgpt: "ChatGPT",
+    codex: "Codex",
+    review: "review",
+    commit: "commit"
+  } as Record<string, string>)[value] ?? value;
+}
+
+function localizeRecommendedAction(value: string): string {
+  return ({
+    fix_blockers: "\u0443\u0441\u0442\u0440\u0430\u043d\u0438\u0442\u044c \u0431\u043b\u043e\u043a\u0435\u0440\u044b",
+    wait_for_codex_or_request_report: "\u0434\u043e\u0436\u0434\u0430\u0442\u044c\u0441\u044f Codex \u0438\u043b\u0438 \u043e\u0442\u0447\u0451\u0442\u0430",
+    run_review_gate: "\u0437\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c review_gate",
+    rerun_review_gate: "\u043f\u0435\u0440\u0435\u0437\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c review_gate",
+    approve_task: "\u043e\u0434\u043e\u0431\u0440\u0438\u0442\u044c \u0437\u0430\u0434\u0430\u0447\u0443",
+    commit_changes: "\u0441\u0434\u0435\u043b\u0430\u0442\u044c commit \u0438\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u0439",
+    create_next_task: "\u0441\u043e\u0437\u0434\u0430\u0442\u044c \u0441\u043b\u0435\u0434\u0443\u044e\u0449\u0443\u044e \u0437\u0430\u0434\u0430\u0447\u0443",
+    create_task: "\u0441\u043e\u0437\u0434\u0430\u0442\u044c \u0437\u0430\u0434\u0430\u0447\u0443"
+  } as Record<string, string>)[value] ?? value;
+}
+
+function localizeNextActionText(value: string): string {
+  const mapped = ({
+    "Resolve doctor, policy, or Git blockers before continuing the relay workflow.":
+      "\u0423\u0441\u0442\u0440\u0430\u043d\u0438\u0442\u0435 \u0431\u043b\u043e\u043a\u0435\u0440\u044b doctor, policy \u0438\u043b\u0438 Git \u043f\u0435\u0440\u0435\u0434 \u043f\u0440\u043e\u0434\u043e\u043b\u0436\u0435\u043d\u0438\u0435\u043c relay workflow.",
+    "Create the next task through create_task.": "\u0421\u043e\u0437\u0434\u0430\u0439\u0442\u0435 \u0441\u043b\u0435\u0434\u0443\u044e\u0449\u0443\u044e \u0437\u0430\u0434\u0430\u0447\u0443 \u0447\u0435\u0440\u0435\u0437 create_task.",
+    "Open Codex Desktop and execute the next pending task.":
+      "\u041e\u0442\u043a\u0440\u043e\u0439\u0442\u0435 Codex Desktop \u0438 \u0432\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u0441\u043b\u0435\u0434\u0443\u044e\u0449\u0443\u044e pending task.",
+    "Run review_gate for the current task.": "\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0435 review_gate \u0434\u043b\u044f \u0442\u0435\u043a\u0443\u0449\u0435\u0439 \u0437\u0430\u0434\u0430\u0447\u0438.",
+    "Rerun review_gate for the current task.": "\u041f\u0435\u0440\u0435\u0437\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0435 review_gate \u0434\u043b\u044f \u0442\u0435\u043a\u0443\u0449\u0435\u0439 \u0437\u0430\u0434\u0430\u0447\u0438.",
+    "Approve or reject the current task.": "\u041e\u0434\u043e\u0431\u0440\u0438\u0442\u0435 \u0438\u043b\u0438 \u043e\u0442\u043a\u043b\u043e\u043d\u0438\u0442\u0435 \u0442\u0435\u043a\u0443\u0449\u0443\u044e \u0437\u0430\u0434\u0430\u0447\u0443.",
+    "Commit the approved changes.": "\u0421\u0434\u0435\u043b\u0430\u0439\u0442\u0435 commit \u043e\u0434\u043e\u0431\u0440\u0435\u043d\u043d\u044b\u0445 \u0438\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u0439.",
+    "Create the next task.": "\u0421\u043e\u0437\u0434\u0430\u0439\u0442\u0435 \u0441\u043b\u0435\u0434\u0443\u044e\u0449\u0443\u044e \u0437\u0430\u0434\u0430\u0447\u0443."
+  } as Record<string, string>)[value];
+
+  if (mapped) {
+    return mapped;
+  }
+
+  return value
+    .replace("Open Codex Desktop, execute task", "\u041e\u0442\u043a\u0440\u043e\u0439\u0442\u0435 Codex Desktop \u0438 \u0432\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u0437\u0430\u0434\u0430\u0447\u0443")
+    .replace("and write report", "\u0438 \u0441\u043e\u0437\u0434\u0430\u0439\u0442\u0435 \u043e\u0442\u0447\u0451\u0442")
+    .replace("Run review_gate for task", "\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0435 review_gate \u0434\u043b\u044f \u0437\u0430\u0434\u0430\u0447\u0438")
+    .replace("Rerun review_gate for task", "\u041f\u0435\u0440\u0435\u0437\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0435 review_gate \u0434\u043b\u044f \u0437\u0430\u0434\u0430\u0447\u0438")
+    .replace("Approve or reject task", "\u041e\u0434\u043e\u0431\u0440\u0438\u0442\u0435 \u0438\u043b\u0438 \u043e\u0442\u043a\u043b\u043e\u043d\u0438\u0442\u0435 \u0437\u0430\u0434\u0430\u0447\u0443")
+    .replace("after reviewing the report and diff.", "\u043f\u043e\u0441\u043b\u0435 \u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0438 \u043e\u0442\u0447\u0451\u0442\u0430 \u0438 diff.")
+    .replace("Commit the approved changes for task", "\u0421\u0434\u0435\u043b\u0430\u0439\u0442\u0435 commit \u043e\u0434\u043e\u0431\u0440\u0435\u043d\u043d\u044b\u0445 \u0438\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u0439 \u0434\u043b\u044f \u0437\u0430\u0434\u0430\u0447\u0438")
+    .replace("Create the next task after", "\u0421\u043e\u0437\u0434\u0430\u0439\u0442\u0435 \u0441\u043b\u0435\u0434\u0443\u044e\u0449\u0443\u044e \u0437\u0430\u0434\u0430\u0447\u0443 \u043f\u043e\u0441\u043b\u0435");
+}
+
+async function probeUrl(fetchImpl: typeof fetch, url: string, timeoutMs: number): Promise<{ ok: boolean }> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetchImpl(url, { signal: controller.signal });
+    return { ok: response.ok };
+  } catch {
+    return { ok: false };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function getLocalIpv4Addresses(): string[] {
+  const interfaces = os.networkInterfaces();
+  return Object.values(interfaces)
+    .flat()
+    .filter((entry): entry is NonNullable<(typeof interfaces)[string]>[number] => Boolean(entry))
+    .filter((entry) => entry.family === "IPv4" && !entry.internal)
+    .map((entry) => entry.address)
+    .sort();
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+export function commandToText(command: DashboardCommandConfig | undefined): string {
+  if (!command) {
+    return "\u043d\u0435 \u043d\u0430\u0441\u0442\u0440\u043e\u0435\u043d\u043e";
+  }
+  return [command.command, ...(command.args ?? [])].join(" ");
+}

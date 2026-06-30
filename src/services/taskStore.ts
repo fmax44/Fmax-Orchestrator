@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { CreateTaskData, ReviewGateProvenance, TaskRecord, TaskState } from "../domain/task.js";
 import type { TaskReport } from "../domain/report.js";
@@ -25,7 +25,7 @@ export class TaskStore {
   async createTask(projectPath: string, input: CreateTaskData): Promise<TaskRecord> {
     const paths = await ensureCodexStructure(projectPath);
     const state = await this.readState(projectPath);
-    const id = this.nextTaskId(state.tasks);
+    const id = await this.nextTaskId(paths.root, state.tasks);
     const now = new Date().toISOString();
     const taskPath = path.join(paths.tasksDir, `${id}-task.md`);
     const reportPath = path.join(paths.reportsDir, `${id}-report.md`);
@@ -98,6 +98,43 @@ export class TaskStore {
     return status ? state.tasks.filter((task) => task.status === status) : state.tasks;
   }
 
+  async syncReportedTasks(projectPath: string): Promise<TaskRecord[]> {
+    const paths = await ensureCodexStructure(projectPath);
+    const state = await this.readState(projectPath);
+    const updatedTasks = await Promise.all(
+      state.tasks.map(async (task) => {
+        if (task.status !== "pending") {
+          return task;
+        }
+
+        const reportPath = ensureRelativeInsideProject(paths.root, task.reportPath);
+        const reportMarkdown = await readFile(reportPath, "utf8").catch(() => undefined);
+
+        if (!reportMarkdown || !isTaskReportForTask(reportMarkdown, task.id)) {
+          return task;
+        }
+
+        const taskFile = ensureRelativeInsideProject(paths.root, task.taskPath);
+        const markdown = await readFile(taskFile, "utf8");
+        const updated: TaskRecord = {
+          ...task,
+          status: "reported",
+          updatedAt: new Date().toISOString()
+        };
+
+        await writeFile(taskFile, replaceMarkdownSection(markdown, "Status", "reported"), "utf8");
+        return updated;
+      })
+    );
+
+    const changed = updatedTasks.some((task, index) => task.status !== state.tasks[index]?.status || task.updatedAt !== state.tasks[index]?.updatedAt);
+    if (changed) {
+      await this.writeState(projectPath, { tasks: updatedTasks });
+    }
+
+    return updatedTasks;
+  }
+
   async updateStatus(projectPath: string, taskId: string, status: TaskStatus): Promise<TaskRecord> {
     const paths = await ensureCodexStructure(projectPath);
     const state = await this.readState(projectPath);
@@ -131,6 +168,10 @@ export class TaskStore {
 
       throw error;
     });
+
+    if (!isTaskReportForTask(markdown, taskId)) {
+      throw new Error(`Report content does not belong to task ${taskId}: ${task.reportPath}`);
+    }
 
     return {
       taskId,
@@ -272,8 +313,33 @@ export class TaskStore {
     await writeFile(statePath, JSON.stringify(state, null, 2) + "\n", "utf8");
   }
 
-  private nextTaskId(tasks: TaskRecord[]): string {
-    const next = tasks.reduce((max, task) => Math.max(max, Number(task.id)), 0) + 1;
+  private async nextTaskId(projectPath: string, tasks: TaskRecord[]): Promise<string> {
+    const reservedIds = new Set<number>();
+
+    for (const task of tasks) {
+      reservedIds.add(Number(task.id));
+    }
+
+    const relativeDirectories = [
+      ".codex/tasks",
+      ".codex/reports",
+      ".codex/archive"
+    ];
+
+    for (const relativeDirectory of relativeDirectories) {
+      const directory = ensureRelativeInsideProject(projectPath, relativeDirectory);
+      const entries = await readdir(directory, { withFileTypes: true }).catch(() => []);
+      for (const entry of entries) {
+        const id = entry.isDirectory()
+          ? parseTaskId(entry.name)
+          : parseTaskId(path.basename(entry.name));
+        if (id !== undefined) {
+          reservedIds.add(id);
+        }
+      }
+    }
+
+    const next = [...reservedIds].reduce((max, id) => Math.max(max, id), 0) + 1;
     return String(next).padStart(4, "0");
   }
 
@@ -349,4 +415,17 @@ async function moveIfExists(projectPath: string, relativePath: string, archiveDi
   const destination = path.join(archiveDir, path.basename(relativePath));
   await rename(source, destination);
   return toProjectRelative(projectPath, destination);
+}
+
+function parseTaskId(name: string): number | undefined {
+  const match = name.match(/^(\d{4})-(?:task|report|review|fix)\.md$/) ?? name.match(/^(\d{4})$/);
+  return match ? Number(match[1]) : undefined;
+}
+
+function isTaskReportForTask(markdown: string, taskId: string): boolean {
+  return new RegExp(`^# Report for Task ${escapeRegExp(taskId)}\\b`, "m").test(markdown);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

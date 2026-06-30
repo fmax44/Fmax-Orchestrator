@@ -19,6 +19,9 @@ export type ProjectRecommendedAction =
   | "create_next_task"
   | "create_task";
 
+export type RelayWaitingFor = "user" | "chatgpt" | "codex" | "review" | "commit";
+export type RelayActor = "user" | "chatgpt" | "codex";
+
 export interface ProjectStatusOptions {
   projectPath: string;
   includeSmoke?: boolean;
@@ -63,6 +66,16 @@ export interface ProjectStatusResult {
       status: TaskStatus;
     };
   };
+  currentTask?: {
+    id: string;
+    title: string;
+    status: TaskStatus;
+    taskPath: string;
+    reportPath: string;
+    reportExists: boolean;
+    reviewExists: boolean;
+    reviewReportPath?: string;
+  };
   reports: {
     latestTaskReport?: string;
     latestReviewReport?: string;
@@ -78,6 +91,9 @@ export interface ProjectStatusResult {
     expired: boolean;
   };
   recommendedAction: ProjectRecommendedAction;
+  waitingFor: RelayWaitingFor;
+  nextActor: RelayActor;
+  nextAction: string;
   warnings: string[];
   errors: string[];
 }
@@ -102,12 +118,19 @@ export class ProjectStatusService {
     const policy = policyResult?.policy;
     warnings.push(...(policyResult?.warnings ?? []), ...(policyResult?.errors ?? []));
 
-    const state = await this.taskStore.readState(root).catch((error: unknown) => {
+    const syncedTasks = await this.taskStore.syncReportedTasks(root).catch((error: unknown) => {
+      errors.push(error instanceof Error ? error.message : String(error));
+      return undefined;
+    });
+    const state = syncedTasks
+      ? { tasks: syncedTasks }
+      : await this.taskStore.readState(root).catch((error: unknown) => {
       errors.push(error instanceof Error ? error.message : String(error));
       return { tasks: [] };
     });
-    const latestTask = options.taskId ? state.tasks.find((task) => task.id === options.taskId) : state.tasks.at(-1);
-    if (options.taskId && !latestTask) {
+    const latestTask = state.tasks.at(-1);
+    const selectedTask = options.taskId ? state.tasks.find((task) => task.id === options.taskId) : selectCurrentTask(state.tasks);
+    if (options.taskId && !selectedTask) {
       errors.push(`Task not found: ${options.taskId}`);
     }
 
@@ -126,8 +149,8 @@ export class ProjectStatusService {
       : undefined;
     const paths = getCodexPaths(root);
     const latestSmokeReport = smoke?.reportPath ?? (await latestFile(paths.root, path.join(paths.codexDir, "smoke", "reports"), ".md"));
-    const selectedTaskReport = latestTask && (await exists(path.join(root, latestTask.reportPath))) ? latestTask.reportPath : undefined;
-    const review = options.includeReview ?? true ? buildReview(latestTask, policy?.workflow.maxReviewAgeMinutes ?? 60) : undefined;
+    const selectedTaskReport = selectedTask && (await exists(path.join(root, selectedTask.reportPath))) ? selectedTask.reportPath : undefined;
+    const review = options.includeReview ?? true ? buildReview(selectedTask, policy?.workflow.maxReviewAgeMinutes ?? 60) : undefined;
     const latestReviewReport = review?.reviewReportPath ?? (await latestFile(paths.root, paths.reportsDir, "-review.md"));
     const counts = countTasks(state.tasks);
 
@@ -162,6 +185,18 @@ export class ProjectStatusService {
         ...counts,
         latest: latestTask ? { id: latestTask.id, title: latestTask.title, status: latestTask.status } : undefined
       },
+      currentTask: selectedTask
+        ? {
+            id: selectedTask.id,
+            title: selectedTask.title,
+            status: selectedTask.status,
+            taskPath: selectedTask.taskPath,
+            reportPath: selectedTask.reportPath,
+            reportExists: Boolean(selectedTaskReport),
+            reviewExists: Boolean(review?.exists),
+            reviewReportPath: review?.reviewReportPath
+          }
+        : undefined,
       reports: {
         latestTaskReport: selectedTaskReport,
         latestReviewReport,
@@ -169,11 +204,18 @@ export class ProjectStatusService {
       },
       review,
       recommendedAction: "create_task",
+      waitingFor: "chatgpt",
+      nextActor: "chatgpt",
+      nextAction: "Create a task through create_task.",
       warnings: unique(warnings),
       errors: unique(errors)
     };
 
-    result.recommendedAction = recommend(result, latestTask, Boolean(selectedTaskReport));
+    result.recommendedAction = recommend(result, selectedTask, Boolean(selectedTaskReport));
+    const relay = describeRelay(result);
+    result.waitingFor = relay.waitingFor;
+    result.nextActor = relay.nextActor;
+    result.nextAction = relay.nextAction;
     return result;
   }
 }
@@ -212,6 +254,12 @@ export function formatProjectStatusText(status: ProjectStatusResult): string {
     `latest review report: ${status.reports.latestReviewReport ?? "none"}`,
     `latest smoke report: ${status.reports.latestSmokeReport ?? "none"}`,
     "",
+    "Current relay state:",
+    status.currentTask ? `${status.currentTask.id} ${status.currentTask.title} - ${status.currentTask.status}` : "none",
+    `waiting for: ${status.waitingFor}`,
+    `next actor: ${status.nextActor}`,
+    `next action: ${status.nextAction}`,
+    "",
     "Review:",
     status.review?.exists ? `last decision: ${status.review.latestDecision}` : "last decision: none",
     status.review?.lastReviewHash ? `review hash: ${status.review.lastReviewHash}` : "review hash: none",
@@ -231,6 +279,63 @@ export function formatProjectStatusText(status: ProjectStatusResult): string {
   }
 
   return lines.join("\n");
+}
+
+function describeRelay(status: ProjectStatusResult): Pick<ProjectStatusResult, "waitingFor" | "nextActor" | "nextAction"> {
+  const task = status.currentTask;
+
+  switch (status.recommendedAction) {
+    case "fix_blockers":
+      return {
+        waitingFor: "user",
+        nextActor: "user",
+        nextAction: "Resolve doctor, policy, or Git blockers before continuing the relay workflow."
+      };
+    case "create_task":
+      return {
+        waitingFor: "chatgpt",
+        nextActor: "chatgpt",
+        nextAction: "Create the next task through create_task."
+      };
+    case "wait_for_codex_or_request_report":
+      return {
+        waitingFor: "codex",
+        nextActor: "codex",
+        nextAction: task
+          ? `Open Codex Desktop, execute task ${task.id} from ${task.taskPath}, and write report ${task.reportPath}.`
+          : "Open Codex Desktop and execute the next pending task."
+      };
+    case "run_review_gate":
+      return {
+        waitingFor: "review",
+        nextActor: "chatgpt",
+        nextAction: task ? `Run review_gate for task ${task.id}.` : "Run review_gate for the current task."
+      };
+    case "rerun_review_gate":
+      return {
+        waitingFor: "review",
+        nextActor: "chatgpt",
+        nextAction: task ? `Rerun review_gate for task ${task.id}; the stored review has expired.` : "Rerun review_gate for the current task."
+      };
+    case "approve_task":
+      return {
+        waitingFor: "chatgpt",
+        nextActor: "chatgpt",
+        nextAction: task ? `Approve or reject task ${task.id} after reviewing the report and diff.` : "Approve or reject the current task."
+      };
+    case "commit_changes":
+      return {
+        waitingFor: "commit",
+        nextActor: "user",
+        nextAction: task ? `Commit the approved changes for task ${task.id}.` : "Commit the approved changes."
+      };
+    case "create_next_task":
+      return {
+        waitingFor: "chatgpt",
+        nextActor: "chatgpt",
+        nextAction: task ? `Create the next task after ${task.id}.` : "Create the next task."
+      };
+  }
 }
 
 function recommend(status: ProjectStatusResult, latestTask: TaskRecord | undefined, reportExists: boolean): ProjectRecommendedAction {
@@ -267,6 +372,12 @@ function recommend(status: ProjectStatusResult, latestTask: TaskRecord | undefin
   }
 
   return "create_task";
+}
+
+function selectCurrentTask(tasks: TaskRecord[]): TaskRecord | undefined {
+  return tasks.find((task) => task.status === "pending")
+    ?? tasks.find((task) => task.status === "reported")
+    ?? tasks.at(-1);
 }
 
 function buildReview(task: TaskRecord | undefined, maxReviewAgeMinutes: number): ProjectStatusResult["review"] {

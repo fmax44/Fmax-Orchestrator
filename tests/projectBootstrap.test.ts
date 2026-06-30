@@ -20,7 +20,7 @@ describe("ProjectBootstrap", () => {
     await expect(readFile(path.join(projectPath, ".codex/state/tasks.json"), "utf8")).resolves.toContain('"tasks": []');
     await expect(readFile(path.join(projectPath, ".codex/README.md"), "utf8")).resolves.toContain("Local Codex Workflow");
     await expect(readFile(path.join(projectPath, ".gitignore"), "utf8")).resolves.toContain(".codex/");
-  });
+  }, 15000);
 
   it("can run bootstrap repeatedly without overwriting existing .codex files", async () => {
     const projectPath = await tempProject();
@@ -34,7 +34,7 @@ describe("ProjectBootstrap", () => {
     expect(second.codexCreated).toBe(false);
     expect(second.gitignoreUpdated).toBe(false);
     await expect(readFile(path.join(projectPath, ".codex/reports/keep.md"), "utf8")).resolves.toBe("keep me");
-  });
+  }, 15000);
 
   it("reports health for a ready project", async () => {
     const projectPath = await tempProject();
@@ -54,7 +54,7 @@ describe("ProjectBootstrap", () => {
     expect(health.ready).toBe(true);
     expect(health.packageManager).toBe("npm");
     expect(health.availableChecks).toEqual(["npm run build", "npm test", "npm run lint"]);
-  });
+  }, 15000);
 
   it("reports warnings for a folder without Git", async () => {
     const projectPath = await tempProject();

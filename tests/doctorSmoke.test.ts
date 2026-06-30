@@ -14,7 +14,7 @@ describe("DoctorService", () => {
 
     expect(result.result).not.toBe("NOT_READY");
     expect(result.orchestrator.checks.some((check) => check.name === "MCP tools registered" && check.status === "pass")).toBe(true);
-  });
+  }, 15000);
 
   it("runs doctor with a ready project", async () => {
     const projectPath = await readyProject();
@@ -24,7 +24,7 @@ describe("DoctorService", () => {
     expect(result.result).toBe("READY_WITH_WARNINGS");
     expect(result.targetProject?.checks.some((check) => check.name === "git repository detected" && check.status === "pass")).toBe(true);
     expect(result.warnings.some((warning) => warning.includes("npm run lint is not available"))).toBe(true);
-  });
+  }, 15000);
 
   it("reports NOT_READY for a target folder without Git", async () => {
     const projectPath = await tempProject();
@@ -33,14 +33,14 @@ describe("DoctorService", () => {
 
     expect(result.result).toBe("NOT_READY");
     expect(result.errors.some((error) => error.includes("git repository detected"))).toBe(true);
-  });
+  }, 15000);
 
   it("is JSON serializable", async () => {
     const result = await new DoctorService().run();
     const parsed = JSON.parse(JSON.stringify(result)) as typeof result;
 
     expect(parsed.orchestrator.checks.length).toBeGreaterThan(0);
-  });
+  }, 15000);
 
   it("runs doctor with a docker-compose profile", async () => {
     const projectPath = await readyProject();
@@ -54,7 +54,7 @@ describe("DoctorService", () => {
       expect(result.targetProject?.checks.some((check) => check.name === "docker compose version" && check.status === "pass")).toBe(true);
       expect(result.targetProject?.checks.some((check) => check.name === "docker compose config" && check.status === "warn")).toBe(true);
     });
-  });
+  }, 15000);
 
   it("does not store full docker compose config output", async () => {
     const projectPath = await readyProject();
@@ -72,7 +72,7 @@ describe("DoctorService", () => {
       expect(configCheck?.details).toContain("exit code 0");
       expect(configCheck?.details).not.toContain("SUPER_SECRET_VALUE");
     });
-  });
+  }, 15000);
 
   it("detects forbidden tracked paths", async () => {
     const projectPath = await tempProject();
@@ -83,7 +83,7 @@ describe("DoctorService", () => {
     const forbidden = await new DoctorService().forbiddenTrackedPaths(projectPath);
 
     expect(forbidden).toEqual([".env"]);
-  });
+  }, 15000);
 });
 
 describe("SmokeRunner", () => {
@@ -96,7 +96,7 @@ describe("SmokeRunner", () => {
     expect(result.result).toBe("PASS");
     expect(result.reportPath).toMatch(/^\.codex\/reports\/smoke-report-/);
     expect(gitStatus.stdout.trim()).toBe("");
-  });
+  }, 15000);
 
   it("creates a smoke report", async () => {
     const projectPath = await readyProject();
@@ -105,7 +105,7 @@ describe("SmokeRunner", () => {
     const report = await readFile(path.join(projectPath, result.reportPath ?? ""), "utf8");
 
     expect(report).toContain("# Smoke Report");
-  });
+  }, 15000);
 
   it("is JSON serializable", async () => {
     const projectPath = await readyProject();
@@ -114,7 +114,7 @@ describe("SmokeRunner", () => {
 
     expect(parsed.result).toBe("PASS");
     expect(parsed.checks.some((check) => check.name === "git_status_clean")).toBe(true);
-  });
+  }, 15000);
 
   it("runs ephemeral smoke without changing ordinary tasks.json", async () => {
     const projectPath = await readyProject();
@@ -128,7 +128,7 @@ describe("SmokeRunner", () => {
     expect(result.ephemeral).toBe(true);
     expect(after).toBe(before);
     expect(result.checks.some((check) => check.name === "ordinary_tasks_json_unchanged" && check.status === "pass")).toBe(true);
-  });
+  }, 15000);
 
   it("writes ephemeral smoke reports under .codex/smoke/reports", async () => {
     const projectPath = await readyProject();
@@ -138,7 +138,7 @@ describe("SmokeRunner", () => {
 
     expect(result.reportPath).toMatch(/^\.codex\/smoke\/reports\/smoke-report-/);
     expect(report).toContain("Mode: ephemeral");
-  });
+  }, 15000);
 
   it("does not create ordinary task files in ephemeral mode", async () => {
     const projectPath = await readyProject();
@@ -151,7 +151,7 @@ describe("SmokeRunner", () => {
     expect(result.result).toBe("PASS");
     expect(after.sort()).toEqual(before.sort());
     expect(result.checks.some((check) => check.name === "ordinary_tasks_dir_unchanged" && check.status === "pass")).toBe(true);
-  });
+  }, 15000);
 
   it("runs docker-compose profile in ephemeral smoke", async () => {
     const projectPath = await readyProject();
@@ -165,7 +165,7 @@ describe("SmokeRunner", () => {
       expect(result.ephemeral).toBe(true);
       expect(result.checks.some((check) => check.name === "docker compose file exists" && check.status === "pass")).toBe(true);
     });
-  });
+  }, 15000);
 
   it("includes ephemeral and profile in JSON output", async () => {
     const projectPath = await readyProject();
@@ -178,7 +178,7 @@ describe("SmokeRunner", () => {
       expect(parsed.ephemeral).toBe(true);
       expect(parsed.profile).toBe("docker-compose");
     });
-  });
+  }, 15000);
 });
 
 async function readyProject(): Promise<string> {

@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { createToolHandlers, toolNames } from "../src/mcp/tools.js";
 import { buildMcpServer } from "../src/mcp/server.js";
+import { ProjectBootstrap } from "../src/services/projectBootstrap.js";
+import { safeExec } from "../src/utils/safeExec.js";
 
 describe("MCP tool registry", () => {
   it("declares the MVP tool names", () => {
@@ -19,6 +21,8 @@ describe("MCP tool registry", () => {
     expect(toolNames).toContain("validate_diff_against_policy");
     expect(toolNames).toContain("review_gate");
     expect(toolNames).toContain("project_status");
+    expect(toolNames).toContain("relay_status");
+    expect(toolNames).toContain("codex_next");
   });
 
   it("builds the MCP server", () => {
@@ -47,11 +51,57 @@ describe("MCP tool registry", () => {
         forceReason: "MCP handler smoke test uses a minimal non-Git temp project."
       })
     ).resolves.toMatchObject({ status: "approved" });
-  });
+  }, 15000);
+
+  it("exposes relay_status and codex_next through tool handlers", async () => {
+    const projectPath = await readyProject();
+    const handlers = createToolHandlers();
+
+    await expect(
+      handlers.projectStatus({
+        projectPath,
+        includeDoctor: false
+      })
+    ).resolves.toMatchObject({
+      recommendedAction: "create_task",
+      waitingFor: "chatgpt",
+      nextActor: "chatgpt"
+    });
+
+    await expect(
+      handlers.relayStatus({
+        projectPath,
+        includeDoctor: false
+      })
+    ).resolves.toMatchObject({
+      waitingFor: "chatgpt",
+      nextActor: "chatgpt"
+    });
+
+    await expect(
+      handlers.codexNext({
+        projectPath
+      })
+    ).resolves.toMatchObject({
+      waitingFor: "chatgpt"
+    });
+  }, 15000);
 });
 
 async function tempProject(): Promise<string> {
   const root = path.join(os.tmpdir(), `chatgpt-codex-mcp-${crypto.randomUUID()}`);
   await mkdir(root, { recursive: true });
+  return root;
+}
+
+async function readyProject(): Promise<string> {
+  const root = path.join(os.tmpdir(), `chatgpt-codex-mcp-ready-${crypto.randomUUID()}`);
+  await mkdir(root, { recursive: true });
+  await safeExec(root, "git init");
+  await safeExec(root, "git config user.email test@example.com");
+  await safeExec(root, "git config user.name Test");
+  await new ProjectBootstrap().bootstrap(root, { policy: "node" });
+  await safeExec(root, "git add .gitignore");
+  await safeExec(root, "git commit -m ready");
   return root;
 }

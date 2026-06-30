@@ -13,6 +13,8 @@ import { ProjectPolicyService } from "../services/projectPolicy.js";
 import { ReviewGateService } from "../services/reviewGate.js";
 import { ApprovalService } from "../services/approvalService.js";
 import { ProjectStatusService } from "../services/projectStatus.js";
+import { RelayStatusService } from "../services/relayStatus.js";
+import { CodexNextService } from "../services/codexNext.js";
 import { toolNames } from "./toolNames.js";
 
 export { toolNames };
@@ -65,6 +67,8 @@ export interface ToolHandlers {
   doctor(input: { projectPath?: string; format?: "json" | "text"; profile?: CheckProfile; allowComposeConfigOutput?: boolean }): Promise<unknown>;
   smokeCheck(input: { projectPath: string; profile?: CheckProfile; ephemeral?: boolean; allowComposeConfigOutput?: boolean }): Promise<unknown>;
   projectStatus(input: { projectPath: string; includeSmoke?: boolean; includeDoctor?: boolean; includeReview?: boolean; taskId?: string }): Promise<unknown>;
+  relayStatus(input: { projectPath: string; includeSmoke?: boolean; includeDoctor?: boolean; includeReview?: boolean; taskId?: string }): Promise<unknown>;
+  codexNext(input: { projectPath: string; watch?: boolean; timeoutMs?: number; pollIntervalMs?: number }): Promise<unknown>;
   createNextTask(input: {
     projectPath: string;
     previousTaskId: string;
@@ -91,7 +95,9 @@ export function createToolHandlers(
   policyService = new ProjectPolicyService(),
   reviewGateService = new ReviewGateService(),
   approvalService = new ApprovalService(),
-  projectStatusService = new ProjectStatusService()
+  projectStatusService = new ProjectStatusService(),
+  relayStatusService = new RelayStatusService(projectStatusService),
+  codexNextService = new CodexNextService(taskStore)
 ): ToolHandlers {
   return {
     async createTask(input) {
@@ -187,6 +193,12 @@ export function createToolHandlers(
     },
     async projectStatus(input) {
       return projectStatusService.check(input);
+    },
+    async relayStatus(input) {
+      return relayStatusService.check(input);
+    },
+    async codexNext(input) {
+      return codexNextService.prepare(input);
     },
     async createNextTask(input) {
       const task = await taskStore.createNextTask(input.projectPath, input.previousTaskId, input);
@@ -370,6 +382,37 @@ export function registerTools(server: McpServer, handlers = createToolHandlers()
       }
     },
     async (args) => jsonResult(await handlers.rejectTask(args))
+  );
+
+  server.registerTool(
+    "relay_status",
+    {
+      title: "Relay Status",
+      description: "Return the current ChatGPT-Codex relay state and the next actor/action for a managed project.",
+      inputSchema: {
+        projectPath: projectPathSchema,
+        includeSmoke: z.boolean().default(false),
+        includeDoctor: z.boolean().default(true),
+        includeReview: z.boolean().default(true),
+        taskId: z.string().optional()
+      }
+    },
+    async (args) => jsonResult(await handlers.relayStatus(args))
+  );
+
+  server.registerTool(
+    "codex_next",
+    {
+      title: "Codex Next Task",
+      description: "Return the next pending task for Codex and optional report-watch status without approving automatically.",
+      inputSchema: {
+        projectPath: projectPathSchema,
+        watch: z.boolean().default(false),
+        timeoutMs: z.number().int().positive().optional(),
+        pollIntervalMs: z.number().int().positive().optional()
+      }
+    },
+    async (args) => jsonResult(await handlers.codexNext(args))
   );
 
   server.registerTool(
