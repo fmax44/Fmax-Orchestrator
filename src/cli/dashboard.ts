@@ -103,6 +103,9 @@ async function handleAction(action: string, localConfigPath: string, config: Das
     case "start-tunnel":
       await startCommand(config.commands.tunnel);
       return;
+    case "start-codex-worker":
+      await startCommand(config.commands.codexWorker);
+      return;
     case "open-config":
       await ensureLocalConfig(localConfigPath);
       await openTarget(localConfigPath);

@@ -24,6 +24,17 @@ describe("DashboardService", () => {
           warnings: [],
           errors: []
         })
+      },
+      codexWorkerService: {
+        readStatus: async () => undefined,
+        inspectEnvironment: async () => ({
+          command: "codex",
+          found: false,
+          execAvailable: false,
+          directExecutionEnabled: false,
+          sandbox: "read-only",
+          lastError: "Command not found: codex"
+        })
       }
     });
     const config = createDefaultDashboardConfig("D:/projects/chatgpt-codex-mcp");
@@ -41,9 +52,11 @@ describe("DashboardService", () => {
     expect(snapshot.ips.country).toBeUndefined();
     expect(snapshot.ips.geoStatus).toBe("unavailable");
     expect(snapshot.projects[0]?.recommendedAction).toBe("create_task");
+    expect(snapshot.components.codexWorker.state).toBe("manual");
+    expect(snapshot.components.codexWorker.meta).toContain("Codex CLI: не найден");
   });
 
-  it("marks tunnel online when health and ready probes pass", async () => {
+  it("renders public IP, city, country, and Codex Worker status", async () => {
     const service = new DashboardService({
       fetchImpl: async (input) => {
         const url = String(input);
@@ -82,6 +95,46 @@ describe("DashboardService", () => {
           warnings: [],
           errors: []
         })
+      },
+      codexWorkerService: {
+        readStatus: async () => ({
+          state: "waiting_for_codex",
+          updatedAt: "2026-06-30T07:00:00.000Z",
+          pollIntervalMs: 5000,
+          message: "Waiting for Codex report for task 0003.",
+          currentTask: {
+            projectName: "demo",
+            projectPath: "D:/projects/demo",
+            taskId: "0003",
+            title: "Add worker tests",
+            status: "pending",
+            taskPath: ".codex/tasks/0003-task.md",
+            reportPath: ".codex/reports/0003-report.md",
+            reportExists: false,
+            instruction: "1. Open task file .codex/tasks/0003-task.md."
+          },
+          lastReportStatus: "missing",
+          directCodexLaunchSupported: false,
+          limitations: ["no direct launch"],
+          codexCli: {
+            command: "codex",
+            commandPath: "C:/Codex/codex.exe",
+            found: true,
+            execAvailable: true,
+            directExecutionEnabled: true,
+            sandbox: "workspace-write",
+            lastExitCode: 0
+          },
+          host: "test-host",
+          pid: 1234
+        }),
+        inspectEnvironment: async () => ({
+          command: "codex",
+          found: true,
+          execAvailable: true,
+          directExecutionEnabled: true,
+          sandbox: "workspace-write"
+        })
       }
     });
     const config = createDefaultDashboardConfig("D:/projects/chatgpt-codex-mcp");
@@ -94,6 +147,7 @@ describe("DashboardService", () => {
     });
 
     expect(snapshot.components.tunnel.state).toBe("online");
+    expect(snapshot.components.codexWorker.state).toBe("degraded");
     expect(snapshot.ips.publicIp).toBe("1.2.3.4");
     expect(snapshot.ips.city).toBe("Moscow");
     expect(snapshot.ips.country).toBe("Russia");
@@ -103,11 +157,17 @@ describe("DashboardService", () => {
       "start-mcp",
       "open-chatgpt",
       "open-codex",
-      "open-config"
+      "open-config",
+      "start-codex-worker"
     ]);
+
     const html = renderDashboardHtml(snapshot, config);
     expect(html).toContain("Открыть VPN");
     expect(html).toContain("Город: Moscow");
     expect(html).toContain("Страна: Russia");
+    expect(html).toContain("Codex Worker");
+    expect(html).toContain("Последняя найденная задача");
+    expect(html).toContain("Codex CLI");
+    expect(html).toContain("workspace-write");
   });
 });

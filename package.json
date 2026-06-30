@@ -21,6 +21,8 @@
     "smoke": "tsx src/cli/smoke.ts",
     "status": "tsx src/cli/status.ts",
     "codex:next": "tsx src/cli/codexNext.ts",
+    "codex:worker": "tsx src/cli/codexWorker.ts",
+    "codex:run-once": "tsx src/cli/codexAutonomousRun.ts",
     "test": "vitest run",
     "lint": "eslint ."
   },

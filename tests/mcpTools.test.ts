@@ -23,6 +23,9 @@ describe("MCP tool registry", () => {
     expect(toolNames).toContain("project_status");
     expect(toolNames).toContain("relay_status");
     expect(toolNames).toContain("codex_next");
+    expect(toolNames).toContain("codex_autonomous_run");
+    expect(toolNames).toContain("start_codex_worker");
+    expect(toolNames).toContain("codex_worker_status");
   });
 
   it("builds the MCP server", () => {
@@ -84,6 +87,26 @@ describe("MCP tool registry", () => {
       })
     ).resolves.toMatchObject({
       waitingFor: "chatgpt"
+    });
+
+    await expect(
+      handlers.codexWorkerStatus({})
+    ).resolves.toMatchObject({
+      runtime: {
+        command: "codex"
+      },
+      statusFilePath: expect.stringContaining("fmax-orchestrator-codex-worker-status.json"),
+      pidFilePath: expect.stringContaining("fmax-orchestrator-codex-worker.pid")
+    });
+
+    await expect(
+      handlers.codexAutonomousRun({
+        projectPath,
+        dryRun: true
+      })
+    ).resolves.toMatchObject({
+      executionState: "idle",
+      directExecutionEnabled: false
     });
   }, 15000);
 });

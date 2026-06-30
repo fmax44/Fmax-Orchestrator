@@ -22,6 +22,20 @@ export interface DashboardHealthConfig {
   mcpHealthUrl?: string;
 }
 
+export interface DashboardWorkerConfig {
+  pollIntervalMs: number;
+  statusFilePath: string;
+  pidFilePath: string;
+  directExecution: {
+    enabled: boolean;
+    command: string;
+    sandbox: "read-only" | "workspace-write" | "danger-full-access";
+    extraArgs: string[];
+    timeoutMs: number;
+    dryRun: boolean;
+  };
+}
+
 export interface DashboardProjectConfig {
   name: string;
   path: string;
@@ -38,8 +52,10 @@ export interface DashboardConfig {
   commands: {
     mcpServer?: DashboardCommandConfig;
     tunnel?: DashboardCommandConfig;
+    codexWorker?: DashboardCommandConfig;
   };
   health: DashboardHealthConfig;
+  worker: DashboardWorkerConfig;
   managedProjects: DashboardProjectConfig[];
 }
 
@@ -86,11 +102,30 @@ export function createDefaultDashboardConfig(orchestratorRoot: string): Dashboar
         command: npmCommand,
         args: ["run", "dev"],
         cwd: root
+      },
+      codexWorker: {
+        label: "Start Codex Worker",
+        command: npmCommand,
+        args: ["run", "codex:worker"],
+        cwd: root
       }
     },
     health: {
       tunnelHealthUrl: "http://127.0.0.1:8080/healthz",
       tunnelReadyUrl: "http://127.0.0.1:8080/readyz"
+    },
+    worker: {
+      pollIntervalMs: 5_000,
+      statusFilePath: path.join(root, "scripts", "fmax-orchestrator-codex-worker-status.json"),
+      pidFilePath: path.join(root, "scripts", "fmax-orchestrator-codex-worker.pid"),
+      directExecution: {
+        enabled: false,
+        command: "codex",
+        sandbox: "read-only",
+        extraArgs: [],
+        timeoutMs: 1_200_000,
+        dryRun: false
+      }
     },
     managedProjects: [
       {
@@ -124,6 +159,10 @@ function mergeDashboardConfig(defaults: DashboardConfig, override: Partial<Dashb
     health: {
       ...defaults.health,
       ...override.health
+    },
+    worker: {
+      ...defaults.worker,
+      ...override.worker
     },
     managedProjects: override.managedProjects ?? defaults.managedProjects
   };

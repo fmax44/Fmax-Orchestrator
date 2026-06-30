@@ -8,5 +8,6 @@ describe("dashboard local config shape", () => {
     const content = await readFile(filePath, "utf8");
 
     expect(content).toContain("browserPath?: string;");
+    expect(content).toContain("codexWorker?: DashboardCommandConfig;");
   });
 });

@@ -17,6 +17,12 @@
       "args": ["run", "dev"],
       "cwd": "D:/projects/chatgpt-codex-mcp"
     },
+    "codexWorker": {
+      "label": "Start Codex Worker",
+      "command": "npm.cmd",
+      "args": ["run", "codex:worker"],
+      "cwd": "D:/projects/chatgpt-codex-mcp"
+    },
     "tunnel": {
       "label": "Start tunnel",
       "command": "D:/projects/chatgpt-codex-mcp/tunnel-client.exe",
@@ -31,6 +37,19 @@
   "health": {
     "tunnelHealthUrl": "http://127.0.0.1:8080/healthz",
     "tunnelReadyUrl": "http://127.0.0.1:8080/readyz"
+  },
+  "worker": {
+    "pollIntervalMs": 5000,
+    "statusFilePath": "D:/projects/chatgpt-codex-mcp/scripts/fmax-orchestrator-codex-worker-status.json",
+    "pidFilePath": "D:/projects/chatgpt-codex-mcp/scripts/fmax-orchestrator-codex-worker.pid",
+    "directExecution": {
+      "enabled": false,
+      "command": "codex",
+      "sandbox": "read-only",
+      "extraArgs": [],
+      "timeoutMs": 1200000,
+      "dryRun": false
+    }
   },
   "managedProjects": [
     {

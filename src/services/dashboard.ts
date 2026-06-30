@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { ProjectStatusService, type ProjectStatusResult } from "./projectStatus.js";
+import { CodexWorkerService, type CodexWorkerStatus } from "./codexWorker.js";
 import type { DashboardCommandConfig, DashboardConfig } from "./dashboardConfig.js";
 
 export type DashboardComponentState = "online" | "degraded" | "offline" | "manual";
@@ -10,6 +11,7 @@ export interface DashboardComponentStatus {
   state: DashboardComponentState;
   details: string;
   actionLabel?: string;
+  meta?: string[];
 }
 
 export interface DashboardProjectCard {
@@ -47,6 +49,7 @@ export interface DashboardSnapshot {
   components: {
     mcpServer: DashboardComponentStatus;
     tunnel: DashboardComponentStatus;
+    codexWorker: DashboardComponentStatus;
   };
   ips: DashboardIpInfo;
   projects: DashboardProjectCard[];
@@ -64,7 +67,8 @@ export type DashboardActionId =
   | "open-vpn"
   | "start-mcp"
   | "start-tunnel"
-  | "open-config";
+  | "open-config"
+  | "start-codex-worker";
 
 export interface DashboardCollectOptions {
   orchestratorRoot: string;
@@ -76,60 +80,78 @@ export interface DashboardCollectOptions {
 export interface DashboardDependencies {
   fetchImpl?: typeof fetch;
   projectStatusService?: Pick<ProjectStatusService, "check">;
+  codexWorkerService?: Pick<CodexWorkerService, "readStatus" | "inspectEnvironment">;
 }
 
 const RU = {
-  heroEyebrow: "Локальный dashboard Fmax-Orchestrator",
-  heroTitle: "Запуск сервисов, relay-статус, IP и здоровье проектов в одном окне",
-  refreshPrefix: "Автообновление каждые",
-  refreshSuffix: "сек. Обновлено:",
-  localConfig: "Локальный config",
-  configLoaded: "Локальный override подключён.",
+  heroEyebrow: "\u041b\u043e\u043a\u0430\u043b\u044c\u043d\u044b\u0439 dashboard Fmax-Orchestrator",
+  heroTitle: "\u0417\u0430\u043f\u0443\u0441\u043a \u0441\u0435\u0440\u0432\u0438\u0441\u043e\u0432, relay-\u0441\u0442\u0430\u0442\u0443\u0441, IP \u0438 \u0437\u0434\u043e\u0440\u043e\u0432\u044c\u0435 \u043f\u0440\u043e\u0435\u043a\u0442\u043e\u0432 \u0432 \u043e\u0434\u043d\u043e\u043c \u043e\u043a\u043d\u0435",
+  refreshPrefix: "\u0410\u0432\u0442\u043e\u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0435 \u043a\u0430\u0436\u0434\u044b\u0435",
+  refreshSuffix: "\u0441\u0435\u043a. \u041e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u043e:",
+  localConfig: "\u041b\u043e\u043a\u0430\u043b\u044c\u043d\u044b\u0439 config",
+  configLoaded: "\u041b\u043e\u043a\u0430\u043b\u044c\u043d\u044b\u0439 override \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0451\u043d.",
   configMissing:
-    "Сейчас используются значения по умолчанию. Создайте local config для путей Codex, VPN и команд запуска tunnel.",
-  ipBlock: "IP и геолокация",
-  localIpv4: "Локальные IPv4",
-  publicIp: "Публичный IP",
-  city: "Город",
-  country: "Страна",
-  cityMissing: "не определён",
-  countryMissing: "не определена",
-  notDetected: "не определены",
-  unavailable: "недоступен",
-  managedProjects: "Управляемые проекты",
-  actionAvailable: "Доступное действие",
-  projectReady: "ГОТОВ К ПРОВЕРКЕ",
-  projectFailed: "ПРОВЕРКА НЕ ПРОШЛА",
-  currentTask: "Текущая задача",
+    "\u0421\u0435\u0439\u0447\u0430\u0441 \u0438\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u044e\u0442\u0441\u044f \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u044f \u043f\u043e \u0443\u043c\u043e\u043b\u0447\u0430\u043d\u0438\u044e. \u0421\u043e\u0437\u0434\u0430\u0439\u0442\u0435 local config \u0434\u043b\u044f \u043f\u0443\u0442\u0435\u0439 Codex, VPN \u0438 \u043a\u043e\u043c\u0430\u043d\u0434 \u0437\u0430\u043f\u0443\u0441\u043a\u0430.",
+  ipBlock: "IP \u0438 \u0433\u0435\u043e\u043b\u043e\u043a\u0430\u0446\u0438\u044f",
+  localIpv4: "\u041b\u043e\u043a\u0430\u043b\u044c\u043d\u044b\u0435 IPv4",
+  publicIp: "\u041f\u0443\u0431\u043b\u0438\u0447\u043d\u044b\u0439 IP",
+  city: "\u0413\u043e\u0440\u043e\u0434",
+  country: "\u0421\u0442\u0440\u0430\u043d\u0430",
+  cityMissing: "\u043d\u0435 \u043e\u043f\u0440\u0435\u0434\u0435\u043b\u0451\u043d",
+  countryMissing: "\u043d\u0435 \u043e\u043f\u0440\u0435\u0434\u0435\u043b\u0435\u043d\u0430",
+  notDetected: "\u043d\u0435 \u043e\u043f\u0440\u0435\u0434\u0435\u043b\u0435\u043d\u044b",
+  unavailable: "\u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d",
+  managedProjects: "\u0423\u043f\u0440\u0430\u0432\u043b\u044f\u0435\u043c\u044b\u0435 \u043f\u0440\u043e\u0435\u043a\u0442\u044b",
+  actionAvailable: "\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e\u0435 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435",
+  projectReady: "\u0413\u041e\u0422\u041e\u0412 \u041a \u041f\u0420\u041e\u0412\u0415\u0420\u041a\u0415",
+  projectFailed: "\u041f\u0420\u041e\u0412\u0415\u0420\u041a\u0410 \u041d\u0415 \u041f\u0420\u041e\u0428\u041b\u0410",
+  currentTask: "\u0422\u0435\u043a\u0443\u0449\u0430\u044f \u0437\u0430\u0434\u0430\u0447\u0430",
   doctor: "Doctor",
   git: "Git",
-  waitingFor: "Ожидание",
-  nextActor: "Следующий исполнитель",
-  recommendedAction: "Рекомендуемое действие",
-  nextStep: "Следующий шаг",
-  warning: "Предупреждение",
-  error: "Ошибка",
-  openVpn: "Открыть VPN",
-  startTunnel: "Запустить Tunnel",
-  startMcp: "Запустить MCP",
-  openChatgpt: "Открыть ChatGPT",
-  openCodex: "Открыть Codex",
-  openConfig: "Открыть конфиг"
+  waitingFor: "\u041e\u0436\u0438\u0434\u0430\u043d\u0438\u0435",
+  nextActor: "\u0421\u043b\u0435\u0434\u0443\u044e\u0449\u0438\u0439 \u0438\u0441\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c",
+  recommendedAction: "\u0420\u0435\u043a\u043e\u043c\u0435\u043d\u0434\u0443\u0435\u043c\u043e\u0435 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435",
+  nextStep: "\u0421\u043b\u0435\u0434\u0443\u044e\u0449\u0438\u0439 \u0448\u0430\u0433",
+  warning: "\u041f\u0440\u0435\u0434\u0443\u043f\u0440\u0435\u0436\u0434\u0435\u043d\u0438\u0435",
+  error: "\u041e\u0448\u0438\u0431\u043a\u0430",
+  openVpn: "\u041e\u0442\u043a\u0440\u044b\u0442\u044c VPN",
+  startTunnel: "\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c Tunnel",
+  startMcp: "\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c MCP",
+  openChatgpt: "\u041e\u0442\u043a\u0440\u044b\u0442\u044c ChatGPT",
+  openCodex: "\u041e\u0442\u043a\u0440\u044b\u0442\u044c Codex",
+  openConfig: "\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u043a\u043e\u043d\u0444\u0438\u0433",
+  startCodexWorker: "\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c Codex Worker",
+  workerTask: "\u041f\u043e\u0441\u043b\u0435\u0434\u043d\u044f\u044f \u043d\u0430\u0439\u0434\u0435\u043d\u043d\u0430\u044f \u0437\u0430\u0434\u0430\u0447\u0430",
+  workerReport: "\u0421\u0442\u0430\u0442\u0443\u0441 report",
+  workerLimitations: "\u041e\u0433\u0440\u0430\u043d\u0438\u0447\u0435\u043d\u0438\u044f worker",
+  workerNotStarted:
+    "\u0421\u0442\u0430\u0442\u0443\u0441 worker \u0435\u0449\u0451 \u043d\u0435 \u0437\u0430\u043f\u0438\u0441\u0430\u043d. \u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0435 worker \u043a\u043d\u043e\u043f\u043a\u043e\u0439 \u0438\u043b\u0438 \u043a\u043e\u043c\u0430\u043d\u0434\u043e\u0439 npm run codex:worker.",
+  workerDirectLaunch:
+    "\u041f\u0440\u044f\u043c\u043e\u0439 \u0431\u0435\u0437\u043e\u043f\u0430\u0441\u043d\u044b\u0439 \u0437\u0430\u043f\u0443\u0441\u043a Codex Desktop \u0438 \u043e\u0442\u043f\u0440\u0430\u0432\u043a\u0430 prompt \u0438\u0437 CLI \u043d\u0435 \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u044e\u0442\u0441\u044f.",
+  workerCliFound: "Codex CLI",
+  workerExecAvailable: "codex exec",
+  workerDirectExecution: "\u041f\u0440\u044f\u043c\u043e\u0435 \u0432\u044b\u043f\u043e\u043b\u043d\u0435\u043d\u0438\u0435",
+  workerLastExitCode: "Last exit code",
+  workerLastError: "Last error",
+  workerSandbox: "Sandbox"
 } as const;
 
 export class DashboardService {
   private readonly fetchImpl: typeof fetch;
   private readonly projectStatusService: Pick<ProjectStatusService, "check">;
+  private readonly codexWorkerService: Pick<CodexWorkerService, "readStatus" | "inspectEnvironment">;
 
   constructor(dependencies: DashboardDependencies = {}) {
     this.fetchImpl = dependencies.fetchImpl ?? fetch;
     this.projectStatusService = dependencies.projectStatusService ?? new ProjectStatusService();
+    this.codexWorkerService = dependencies.codexWorkerService ?? new CodexWorkerService();
   }
 
   async collect(options: DashboardCollectOptions): Promise<DashboardSnapshot> {
-    const [mcpServer, tunnel, ips, projects] = await Promise.all([
+    const [mcpServer, tunnel, codexWorker, ips, projects] = await Promise.all([
       this.readMcpStatus(options.config),
       this.readTunnelStatus(options.config),
+      this.readCodexWorkerStatus(options.config),
       this.readIpInfo(options.config),
       this.readProjects(options.config)
     ]);
@@ -141,7 +163,8 @@ export class DashboardService {
       configExists: options.configExists,
       components: {
         mcpServer,
-        tunnel
+        tunnel,
+        codexWorker
       },
       ips,
       projects,
@@ -178,8 +201,7 @@ export class DashboardService {
     if (!ip) {
       return {
         geoStatus: "unavailable",
-        geoDetails:
-          "\u0413\u0435\u043e\u043b\u043e\u043a\u0430\u0446\u0438\u044f \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430, \u043f\u043e\u0442\u043e\u043c\u0443 \u0447\u0442\u043e \u043f\u0443\u0431\u043b\u0438\u0447\u043d\u044b\u0439 IP \u043d\u0435 \u043e\u043f\u0440\u0435\u0434\u0435\u043b\u0451\u043d."
+        geoDetails: "\u0413\u0435\u043e\u043b\u043e\u043a\u0430\u0446\u0438\u044f \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430, \u043f\u043e\u0442\u043e\u043c\u0443 \u0447\u0442\u043e \u043f\u0443\u0431\u043b\u0438\u0447\u043d\u044b\u0439 IP \u043d\u0435 \u043e\u043f\u0440\u0435\u0434\u0435\u043b\u0451\u043d."
       };
     }
 
@@ -204,8 +226,7 @@ export class DashboardService {
       if (body.success === false) {
         return {
           geoStatus: "unavailable",
-          geoDetails:
-            "\u0413\u0435\u043e\u043b\u043e\u043a\u0430\u0446\u0438\u044f \u0432\u0435\u0440\u043d\u0443\u043b\u0430 \u043e\u0442\u043a\u0430\u0437 \u0438\u043b\u0438 \u043d\u0435\u043f\u043e\u043b\u043d\u044b\u0435 \u0434\u0430\u043d\u043d\u044b\u0435."
+          geoDetails: "\u0413\u0435\u043e\u043b\u043e\u043a\u0430\u0446\u0438\u044f \u0432\u0435\u0440\u043d\u0443\u043b\u0430 \u043e\u0442\u043a\u0430\u0437 \u0438\u043b\u0438 \u043d\u0435\u043f\u043e\u043b\u043d\u044b\u0435 \u0434\u0430\u043d\u043d\u044b\u0435."
         };
       }
 
@@ -227,8 +248,7 @@ export class DashboardService {
     } catch {
       return {
         geoStatus: "unavailable",
-        geoDetails:
-          "\u0413\u0435\u043e\u043b\u043e\u043a\u0430\u0446\u0438\u044f \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 \u043f\u043e \u0442\u0430\u0439\u043c\u0430\u0443\u0442\u0443, \u043e\u0444\u043b\u0430\u0439\u043d \u0438\u043b\u0438 \u0447\u0435\u0440\u0435\u0437 VPN."
+        geoDetails: "\u0413\u0435\u043e\u043b\u043e\u043a\u0430\u0446\u0438\u044f \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 \u043f\u043e \u0442\u0430\u0439\u043c\u0430\u0443\u0442\u0443, \u043e\u0444\u043b\u0430\u0439\u043d \u0438\u043b\u0438 \u0447\u0435\u0440\u0435\u0437 VPN."
       };
     } finally {
       clearTimeout(timeout);
@@ -331,9 +351,25 @@ export class DashboardService {
       state: config.commands.tunnel ? "offline" : "manual",
       details: config.commands.tunnel
         ? `\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430 tunnel \u043d\u0435 \u043f\u0440\u043e\u0448\u043b\u0430 \u043f\u043e ${config.health.tunnelHealthUrl}. \u0418\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u0439\u0442\u0435 \u043a\u043d\u043e\u043f\u043a\u0443 \u0437\u0430\u043f\u0443\u0441\u043a\u0430.`
-        : `\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430 tunnel \u043d\u0435 \u043f\u0440\u043e\u0448\u043b\u0430 \u043f\u043e ${config.health.tunnelHealthUrl}. \u0414\u043e\u0431\u0430\u0432\u044c\u0442\u0435 \u043a\u043e\u043c\u0430\u043d\u0434\u0443 tunnel \u0432 \u043b\u043e\u043a\u0430\u043b\u044c\u043d\u044b\u0439 config \u0434\u043b\u044f \u0437\u0430\u043f\u0443\u0441\u043a\u0430 \u0432 \u043e\u0434\u0438\u043d \u043a\u043b\u0438\u043a.`,
+        : `\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430 tunnel \u043d\u0435 \u043f\u0440\u043e\u0448\u043b\u0430 \u043f\u043e ${config.health.tunnelHealthUrl}. \u0414\u043e\u0431\u0430\u0432\u044c\u0442\u0435 \u043a\u043e\u043c\u0430\u043d\u0434\u0443 tunnel \u0432 local config \u0434\u043b\u044f \u0437\u0430\u043f\u0443\u0441\u043a\u0430 \u0432 \u043e\u0434\u0438\u043d \u043a\u043b\u0438\u043a.`,
       actionLabel: RU.startTunnel
     };
+  }
+
+  private async readCodexWorkerStatus(config: DashboardConfig): Promise<DashboardComponentStatus> {
+    const status = await this.codexWorkerService.readStatus(config.worker.statusFilePath);
+    if (!status) {
+      const runtime = await this.codexWorkerService.inspectEnvironment(config.worker.directExecution);
+      return {
+        name: "Codex Worker",
+        state: config.commands.codexWorker ? "manual" : "offline",
+        details: RU.workerNotStarted,
+        actionLabel: RU.startCodexWorker,
+        meta: [...buildWorkerMeta(runtime), `${RU.workerLimitations}: ${RU.workerDirectLaunch}`]
+      };
+    }
+
+    return mapWorkerStatus(status);
   }
 }
 
@@ -469,6 +505,7 @@ export function renderDashboardHtml(snapshot: DashboardSnapshot, config: Dashboa
     <section class="component-grid">
       ${renderComponentCard(snapshot.components.mcpServer)}
       ${renderComponentCard(snapshot.components.tunnel)}
+      ${renderComponentCard(snapshot.components.codexWorker)}
     </section>
     <section>
       <h2>${RU.managedProjects}</h2>
@@ -492,6 +529,7 @@ function renderComponentCard(component: DashboardComponentStatus): string {
     <p class="pill ${component.state}">${escapeHtml(localizeComponentState(component.state))}</p>
     <h3>${escapeHtml(component.name)}</h3>
     <p>${escapeHtml(component.details)}</p>
+    ${component.meta?.length ? `<ul class="meta">${component.meta.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}
     ${component.actionLabel ? `<p class="muted">${RU.actionAvailable}: ${escapeHtml(component.actionLabel)}</p>` : ""}
   </article>`;
 }
@@ -551,6 +589,12 @@ function buildActions(config: DashboardConfig): DashboardSnapshot["actions"] {
       id: "open-config",
       label: RU.openConfig,
       enabled: true
+    },
+    {
+      id: "start-codex-worker",
+      label: RU.startCodexWorker,
+      enabled: Boolean(config.commands.codexWorker),
+      reason: "\u0423\u043a\u0430\u0436\u0438\u0442\u0435 commands.codexWorker \u0432 local config"
     }
   ];
 }
@@ -573,6 +617,51 @@ function mapProjectStatus(name: string, status: ProjectStatusResult): DashboardP
     errors: status.errors,
     warnings: status.warnings
   };
+}
+
+function mapWorkerStatus(status: CodexWorkerStatus): DashboardComponentStatus {
+  const state = workerStateToComponentState(status.state);
+  const meta = [
+    status.currentTask
+      ? `${RU.workerTask}: ${status.currentTask.projectName} / ${status.currentTask.taskId} / ${status.currentTask.title}`
+      : `${RU.workerTask}: \u043d\u0435\u0442`,
+    `${RU.workerReport}: ${status.lastReportStatus === "detected" ? "\u043d\u0430\u0439\u0434\u0435\u043d" : "\u0435\u0449\u0451 \u043d\u0435\u0442"}`,
+    ...buildWorkerMeta(status.codexCli),
+    `${RU.workerLimitations}: ${RU.workerDirectLaunch}`
+  ];
+
+  return {
+    name: "Codex Worker",
+    state,
+    details: `${status.message} (${status.updatedAt})`,
+    actionLabel: RU.startCodexWorker,
+    meta
+  };
+}
+
+function buildWorkerMeta(status: CodexWorkerStatus["codexCli"]): string[] {
+  return [
+    `${RU.workerCliFound}: ${status.found ? "\u043d\u0430\u0439\u0434\u0435\u043d" : "\u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d"}`,
+    `${RU.workerExecAvailable}: ${status.execAvailable ? "\u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d" : "\u043d\u0435 \u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d"}`,
+    `${RU.workerDirectExecution}: ${status.directExecutionEnabled ? "\u0432\u043a\u043b\u044e\u0447\u0435\u043d\u043e" : "\u0432\u044b\u043a\u043b\u044e\u0447\u0435\u043d\u043e"}`,
+    `${RU.workerSandbox}: ${status.sandbox}`,
+    `${RU.workerLastExitCode}: ${status.lastExitCode ?? "\u043d\u0435\u0442"}`,
+    `${RU.workerLastError}: ${status.lastError ?? "\u043d\u0435\u0442"}`
+  ];
+}
+
+function workerStateToComponentState(state: CodexWorkerStatus["state"]): DashboardComponentState {
+  switch (state) {
+    case "idle":
+      return "manual";
+    case "task_found":
+    case "waiting_for_codex":
+      return "degraded";
+    case "report_detected":
+      return "online";
+    case "error":
+      return "offline";
+  }
 }
 
 function localizeComponentState(state: DashboardComponentState): string {

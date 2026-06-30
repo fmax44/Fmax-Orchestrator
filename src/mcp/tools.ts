@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { spawn } from "node:child_process";
+import path from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { TaskStore } from "../services/taskStore.js";
 import { GitService, type DiffMode } from "../services/gitService.js";
@@ -15,6 +17,9 @@ import { ApprovalService } from "../services/approvalService.js";
 import { ProjectStatusService } from "../services/projectStatus.js";
 import { RelayStatusService } from "../services/relayStatus.js";
 import { CodexNextService } from "../services/codexNext.js";
+import { CodexWorkerService } from "../services/codexWorker.js";
+import { CodexAutonomousRunService } from "../services/codexAutonomousRun.js";
+import { loadDashboardConfig, type DashboardCommandConfig } from "../services/dashboardConfig.js";
 import { toolNames } from "./toolNames.js";
 
 export { toolNames };
@@ -69,6 +74,9 @@ export interface ToolHandlers {
   projectStatus(input: { projectPath: string; includeSmoke?: boolean; includeDoctor?: boolean; includeReview?: boolean; taskId?: string }): Promise<unknown>;
   relayStatus(input: { projectPath: string; includeSmoke?: boolean; includeDoctor?: boolean; includeReview?: boolean; taskId?: string }): Promise<unknown>;
   codexNext(input: { projectPath: string; watch?: boolean; timeoutMs?: number; pollIntervalMs?: number }): Promise<unknown>;
+  codexAutonomousRun(input: { projectPath?: string; timeoutMs?: number; pollIntervalMs?: number; dryRun?: boolean }): Promise<unknown>;
+  startCodexWorker(input: { projectPath?: string; pollIntervalMs?: number }): Promise<unknown>;
+  codexWorkerStatus(input: Record<string, never>): Promise<unknown>;
   createNextTask(input: {
     projectPath: string;
     previousTaskId: string;
@@ -97,7 +105,9 @@ export function createToolHandlers(
   approvalService = new ApprovalService(),
   projectStatusService = new ProjectStatusService(),
   relayStatusService = new RelayStatusService(projectStatusService),
-  codexNextService = new CodexNextService(taskStore)
+  codexNextService = new CodexNextService(taskStore),
+  codexWorkerService = new CodexWorkerService(),
+  codexAutonomousRunService = new CodexAutonomousRunService({ codexNextService, codexWorkerService, gitService })
 ): ToolHandlers {
   return {
     async createTask(input) {
@@ -199,6 +209,54 @@ export function createToolHandlers(
     },
     async codexNext(input) {
       return codexNextService.prepare(input);
+    },
+    async codexAutonomousRun(input) {
+      const loaded = await loadDashboardConfig(process.cwd());
+      return codexAutonomousRunService.run({
+        projects: input.projectPath
+          ? [{ name: path.basename(input.projectPath), path: input.projectPath }]
+          : loaded.config.managedProjects,
+        projectPath: input.projectPath,
+        statusFilePath: loaded.config.worker.statusFilePath,
+        pidFilePath: loaded.config.worker.pidFilePath,
+        pollIntervalMs: input.pollIntervalMs ?? loaded.config.worker.pollIntervalMs,
+        waitTimeoutMs: input.timeoutMs,
+        dryRun: input.dryRun,
+        directExecution: loaded.config.worker.directExecution
+      });
+    },
+    async startCodexWorker(input) {
+      const loaded = await loadDashboardConfig(process.cwd());
+      const command = loaded.config.commands.codexWorker;
+      if (!command) {
+        throw new Error("commands.codexWorker is not configured.");
+      }
+
+      const extraArgs: string[] = [];
+      if (input.projectPath) {
+        extraArgs.push("--project", input.projectPath);
+      }
+      if (input.pollIntervalMs) {
+        extraArgs.push("--poll-interval-ms", String(input.pollIntervalMs));
+      }
+
+      startDetachedCommand(command, extraArgs);
+      return {
+        started: true,
+        command: [command.command, ...(command.args ?? []), ...extraArgs].join(" "),
+        workerStatusFile: loaded.config.worker.statusFilePath,
+        directCodexLaunchSupported: false,
+        directExecutionEnabled: loaded.config.worker.directExecution.enabled
+      };
+    },
+    async codexWorkerStatus() {
+      const loaded = await loadDashboardConfig(process.cwd());
+      return {
+        status: await codexWorkerService.readStatus(loaded.config.worker.statusFilePath),
+        runtime: await codexWorkerService.inspectEnvironment(loaded.config.worker.directExecution),
+        statusFilePath: loaded.config.worker.statusFilePath,
+        pidFilePath: loaded.config.worker.pidFilePath
+      };
     },
     async createNextTask(input) {
       const task = await taskStore.createNextTask(input.projectPath, input.previousTaskId, input);
@@ -416,6 +474,44 @@ export function registerTools(server: McpServer, handlers = createToolHandlers()
   );
 
   server.registerTool(
+    "codex_autonomous_run",
+    {
+      title: "Controlled Codex Autonomous Run",
+      description: "Run one controlled autonomous Codex execution loop for the next pending task without auto-approving, auto-committing, or auto-pushing.",
+      inputSchema: {
+        projectPath: z.string().optional(),
+        timeoutMs: z.number().int().positive().optional(),
+        pollIntervalMs: z.number().int().positive().optional(),
+        dryRun: z.boolean().default(false)
+      }
+    },
+    async (args) => jsonResult(await handlers.codexAutonomousRun(args))
+  );
+
+  server.registerTool(
+    "start_codex_worker",
+    {
+      title: "Start Codex Worker",
+      description: "Start the local Codex Worker watcher process without auto-approving or auto-committing.",
+      inputSchema: {
+        projectPath: z.string().optional(),
+        pollIntervalMs: z.number().int().positive().optional()
+      }
+    },
+    async (args) => jsonResult(await handlers.startCodexWorker(args))
+  );
+
+  server.registerTool(
+    "codex_worker_status",
+    {
+      title: "Codex Worker Status",
+      description: "Read the latest persisted Codex Worker status snapshot.",
+      inputSchema: {}
+    },
+    async () => jsonResult(await handlers.codexWorkerStatus({}))
+  );
+
+  server.registerTool(
     "create_next_task",
     {
       title: "Create Next Task",
@@ -532,4 +628,16 @@ function jsonResult(value: unknown) {
       }
     ]
   };
+}
+
+function startDetachedCommand(command: DashboardCommandConfig, extraArgs: string[] = []): void {
+  spawn(command.command, [...(command.args ?? []), ...extraArgs], {
+    cwd: command.cwd ?? process.cwd(),
+    env: {
+      ...process.env,
+      ...command.env
+    },
+    detached: true,
+    stdio: "ignore"
+  }).unref();
 }
