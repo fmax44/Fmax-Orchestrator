@@ -234,7 +234,7 @@ export class CodexAutonomousRunService {
       dryRun: false,
       changedFilesSummary: await this.changedFilesSummary(pending.project.path),
       directExecutionReason: status.codexCli.lastExitCode === 0
-        ? "codex exec finished successfully, but the expected report was not detected."
+        ? buildReportMissingReason(status)
         : "codex exec did not reach a successful terminal report-detected state before timeout.",
       configSource: options.localConfigExists ? "local" : "default",
       messageOverride: buildTimeoutMessage(status, waitTimeoutMs)
@@ -342,10 +342,41 @@ function buildTimeoutMessage(status: CodexWorkerStatus, waitTimeoutMs: number): 
   const taskId = status.currentTask?.taskId ?? "unknown";
   const reportPath = status.currentTask?.reportPath ?? "the expected report path";
   const waitedMs = Math.max(0, waitTimeoutMs);
+  const writeBlocker = detectReportWriteBlocker(status);
 
   if (status.codexCli.lastExitCode === 0) {
+    if (writeBlocker) {
+      return `codex exec finished for task ${taskId}, but report creation for ${reportPath} was blocked inside the Codex runtime (${writeBlocker}). Inspect the worker output and create the report manually if needed.`;
+    }
+
     return `codex exec finished for task ${taskId}, but ${reportPath} was not detected within ${waitedMs} ms. Inspect the worker output and create the report manually if needed.`;
   }
 
   return `Timed out waiting ${waitedMs} ms for report detection for task ${taskId}. Inspect the worker output or run Codex manually before retrying.`;
+}
+
+function buildReportMissingReason(status: CodexWorkerStatus): string {
+  const writeBlocker = detectReportWriteBlocker(status);
+  if (writeBlocker) {
+    return `codex exec finished successfully, but report creation was blocked inside the Codex runtime (${writeBlocker}).`;
+  }
+
+  return "codex exec finished successfully, but the expected report was not detected.";
+}
+
+function detectReportWriteBlocker(status: CodexWorkerStatus): string | undefined {
+  const output = `${status.codexCli.lastError ?? ""}\n${status.message}`.toLowerCase();
+  if (!output.trim()) {
+    return undefined;
+  }
+
+  if (output.includes("access is denied") || output.includes("permission denied")) {
+    return "write access denied";
+  }
+
+  if (output.includes("writing outside of the project")) {
+    return "sandbox path rejected the report write";
+  }
+
+  return undefined;
 }

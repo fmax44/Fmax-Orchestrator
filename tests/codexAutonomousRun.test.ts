@@ -195,6 +195,37 @@ describe("CodexAutonomousRunService", () => {
     expect(result.codexCli?.lastExitCode).toBe(0);
   });
 
+  it("surfaces a report write blocker when codex exec output shows access denied", async () => {
+    const workerRun = vi
+      .fn()
+      .mockResolvedValue(createWorkerStatus("waiting_for_codex", {
+        reportExists: false,
+        lastExitCode: 0,
+        lastError: "Set-Content : Access is denied."
+      }));
+    const service = createService({
+      workerRun,
+      inspectEnvironment: async () => createRuntime(),
+      gitOutput: ""
+    });
+
+    const result = await service.run({
+      projects: [{ name: "demo", path: "D:/projects/demo" }],
+      statusFilePath: "D:/tmp/status.json",
+      pidFilePath: "D:/tmp/worker.pid",
+      pollIntervalMs: 1,
+      waitTimeoutMs: 2,
+      directExecution: {
+        enabled: true,
+        sandbox: "workspace-write"
+      }
+    });
+
+    expect(result.executionState).toBe("report_missing");
+    expect(result.directExecutionReason).toContain("write access denied");
+    expect(result.message).toContain("blocked inside the Codex runtime");
+  });
+
   it("returns timeout when report detection never reaches a terminal success state", async () => {
     const workerRun = vi
       .fn()

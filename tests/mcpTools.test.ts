@@ -93,7 +93,7 @@ describe("MCP tool registry", () => {
       handlers.codexWorkerStatus({})
     ).resolves.toMatchObject({
       runtime: {
-        command: "codex"
+        command: expect.stringMatching(/codex(?:\.cmd)?$/i)
       },
       statusFilePath: expect.stringContaining("fmax-orchestrator-codex-worker-status.json"),
       pidFilePath: expect.stringContaining("fmax-orchestrator-codex-worker.pid")
