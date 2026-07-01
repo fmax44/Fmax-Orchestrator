@@ -451,8 +451,28 @@ You can now run a local launcher/dashboard for Windows operations:
 
 ```powershell
 Copy-Item .\scripts\fmax-orchestrator.config.example.json .\scripts\fmax-orchestrator.config.local.json
-npm run dashboard:start -- --open
+npm run dashboard:open
 ```
+
+Dashboard CLI help:
+
+```powershell
+npm run dashboard -- --help
+```
+
+Additional dashboard scripts:
+
+- `npm run dashboard`
+- `npm run dashboard:open`
+- `npm run dashboard:start -- --open`
+
+HTTP endpoints:
+
+- `GET /`
+- `HEAD /`
+- `GET /health`
+- `GET /healthz`
+- `GET /api/status`
 
 Or create a Desktop shortcut:
 
@@ -465,8 +485,14 @@ The dashboard centralizes:
 - ChatGPT open action
 - Codex Desktop open action
 - VPN app open action
+- MCP / tunnel / Codex Worker action buttons with inline failure messages
 - tunnel health (`healthz` / `readyz`)
 - managed project cards powered by `project_status`
 - local IPv4 and optional public IP lookup
+
+Notes:
+
+- On Windows the launcher now starts `.cmd`, `.bat`, and `.ps1` commands through a Windows-safe detached spawn path to avoid `spawn EINVAL` for dashboard actions such as `start-mcp`.
+- Russian dashboard HTML is served as UTF-8 (`charset=utf-8`) and covered by tests.
 
 See [docs/DESKTOP_DASHBOARD_RUNBOOK_RU.md](docs/DESKTOP_DASHBOARD_RUNBOOK_RU.md) for the Russian runbook.

@@ -5,8 +5,14 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { DashboardService, renderDashboardHtml } from "../services/dashboard.js";
 import { loadDashboardConfig, type DashboardCommandConfig, type DashboardConfig } from "../services/dashboardConfig.js";
+import { launchDetachedProcess } from "../utils/processLaunch.js";
 
 const args = parseArgs(process.argv.slice(2));
+if (args.help) {
+  console.log(renderHelpText());
+  process.exit(0);
+}
+
 const orchestratorRoot = process.cwd();
 const loaded = await loadDashboardConfig(orchestratorRoot);
 const port = args.port ?? loaded.config.dashboardPort;
@@ -15,6 +21,16 @@ const dashboard = new DashboardService();
 const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url ?? "/", `http://127.0.0.1:${port}`);
+    const flash = readFlashMessage(url);
+
+    if ((request.method === "GET" || request.method === "HEAD") && (url.pathname === "/health" || url.pathname === "/healthz")) {
+      return sendJson(response, {
+        ok: true,
+        service: "dashboard",
+        port,
+        timestamp: new Date().toISOString()
+      }, request.method === "HEAD");
+    }
 
     if (request.method === "GET" && url.pathname === "/api/status") {
       const snapshot = await dashboard.collect({
@@ -27,21 +43,34 @@ const server = createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && url.pathname.startsWith("/action/")) {
-      await handleAction(url.pathname.replace("/action/", ""), loaded.localConfigPath, loaded.config);
+      const action = url.pathname.replace("/action/", "");
+      try {
+        await handleAction(action, loaded.localConfigPath, loaded.config);
+      } catch (error: unknown) {
+        response.statusCode = 303;
+        response.setHeader("Location", `/?error=${encodeURIComponent(formatActionError(action, error))}`);
+        response.end();
+        return;
+      }
+
       response.statusCode = 303;
-      response.setHeader("Location", "/");
+      response.setHeader("Location", `/?ok=${encodeURIComponent(`Действие "${action}" запущено.`)}`);
       response.end();
       return;
     }
 
-    if (request.method === "GET" && url.pathname === "/") {
+    if ((request.method === "GET" || request.method === "HEAD") && url.pathname === "/") {
+      if (request.method === "HEAD") {
+        return sendHtml(response, "", true);
+      }
+
       const snapshot = await dashboard.collect({
         orchestratorRoot,
         configPath: loaded.localConfigPath,
         configExists: loaded.localConfigExists,
         config: loaded.config
       });
-      return sendHtml(response, renderDashboardHtml(snapshot, loaded.config));
+      return sendHtml(response, renderDashboardHtml(snapshot, loaded.config, { flash }));
     }
 
     response.statusCode = 404;
@@ -132,15 +161,7 @@ async function startCommand(command: DashboardCommandConfig | undefined): Promis
     throw new Error("Command is not configured.");
   }
 
-  spawn(command.command, command.args ?? [], {
-    cwd: command.cwd ?? process.cwd(),
-    env: {
-      ...process.env,
-      ...command.env
-    },
-    detached: true,
-    stdio: "ignore"
-  }).unref();
+  await launchDetachedProcess(command);
 }
 
 async function openTarget(target: string, preferredAppPath?: string): Promise<void> {
@@ -166,22 +187,23 @@ async function openTarget(target: string, preferredAppPath?: string): Promise<vo
   }).unref();
 }
 
-function sendHtml(response: ServerResponse<IncomingMessage>, html: string): void {
+function sendHtml(response: ServerResponse<IncomingMessage>, html: string, headOnly = false): void {
   response.statusCode = 200;
   response.setHeader("Content-Type", "text/html; charset=utf-8");
-  response.end(html);
+  response.end(headOnly ? undefined : html);
 }
 
-function sendJson(response: ServerResponse<IncomingMessage>, body: unknown): void {
+function sendJson(response: ServerResponse<IncomingMessage>, body: unknown, headOnly = false): void {
   response.statusCode = 200;
   response.setHeader("Content-Type", "application/json; charset=utf-8");
-  response.end(JSON.stringify(body, null, 2));
+  response.end(headOnly ? undefined : JSON.stringify(body, null, 2));
 }
 
-function parseArgs(argv: string[]): { port?: number; open: boolean } {
+function parseArgs(argv: string[]): { port?: number; open: boolean; help: boolean } {
   return {
     port: readValue(argv, "--port") ? Number(readValue(argv, "--port")) : undefined,
-    open: argv.includes("--open")
+    open: argv.includes("--open"),
+    help: argv.includes("--help") || argv.includes("-h")
   };
 }
 
@@ -204,4 +226,46 @@ async function writePid(port: number): Promise<void> {
 async function removePid(): Promise<void> {
   const pidPath = path.join(process.cwd(), "scripts", "fmax-orchestrator-dashboard.pid");
   await stat(pidPath).then(() => import("node:fs/promises").then((fs) => fs.unlink(pidPath))).catch(() => undefined);
+}
+
+function readFlashMessage(url: URL): { kind: "ok" | "error"; text: string } | undefined {
+  const error = url.searchParams.get("error")?.trim();
+  if (error) {
+    return { kind: "error", text: error };
+  }
+
+  const ok = url.searchParams.get("ok")?.trim();
+  if (ok) {
+    return { kind: "ok", text: ok };
+  }
+
+  return undefined;
+}
+
+function formatActionError(action: string, error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return `Действие "${action}" не удалось запустить: ${message}`;
+}
+
+function renderHelpText(): string {
+  return [
+    "Fmax-Orchestrator dashboard CLI",
+    "",
+    "Usage:",
+    "  npm run dashboard -- [--port <number>] [--open]",
+    "  npm run dashboard:open",
+    "  npm run dashboard:start -- --open",
+    "",
+    "Options:",
+    "  --port <number>  Override dashboard HTTP port.",
+    "  --open           Open the dashboard in the configured browser after start.",
+    "  -h, --help       Show this help message.",
+    "",
+    "HTTP endpoints:",
+    "  GET  /",
+    "  HEAD /",
+    "  GET  /health",
+    "  GET  /healthz",
+    "  GET  /api/status"
+  ].join("\n");
 }

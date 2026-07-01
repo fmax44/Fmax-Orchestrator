@@ -1,4 +1,6 @@
 $ErrorActionPreference = "Stop"
+$OutputEncoding = [System.Text.Encoding]::UTF8
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
@@ -9,4 +11,4 @@ if (-not (Test-Path ".\node_modules")) {
 }
 
 Write-Host "Запускаю dashboard Fmax-Orchestrator..." -ForegroundColor Cyan
-npm run dashboard:start -- --open
+npm.cmd run dashboard:open

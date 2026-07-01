@@ -17,6 +17,8 @@
     "review": "tsx src/cli/review.ts",
     "relay:status": "tsx src/cli/relayStatus.ts",
     "mcp:self-test": "tsx src/cli/mcpSelfTest.ts",
+    "dashboard": "tsx src/cli/dashboard.ts",
+    "dashboard:open": "tsx src/cli/dashboard.ts --open",
     "dashboard:start": "tsx src/cli/dashboard.ts",
     "smoke": "tsx src/cli/smoke.ts",
     "status": "tsx src/cli/status.ts",

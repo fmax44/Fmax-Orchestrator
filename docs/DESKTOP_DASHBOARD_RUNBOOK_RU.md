@@ -37,15 +37,34 @@ powershell -ExecutionPolicy Bypass -File .\scripts\create-desktop-shortcut.ps1
 
 ## Как запускать dashboard
 
+Через PowerShell-скрипт:
+
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\start-dashboard.ps1
 ```
 
-Или:
+Напрямую:
 
 ```powershell
-npm run dashboard:start -- --open
+npm run dashboard
+npm run dashboard:open
 ```
+
+CLI help:
+
+```powershell
+npm run dashboard -- --help
+```
+
+## HTTP endpoints
+
+- `GET /` - HTML dashboard
+- `HEAD /` - лёгкая проверка доступности root без полной перерисовки
+- `GET /health`
+- `GET /healthz`
+- `GET /api/status`
+
+Все HTTP-ответы dashboard отдаются как UTF-8.
 
 ## Codex Worker
 
@@ -106,23 +125,18 @@ npm run codex:run-once -- --project "D:\projects\chatgpt-codex-mcp" --dry-run --
 - worker не умеет сам открыть окно Codex Desktop и вставить prompt
 - Review Gate, approve/reject и commit остаются отдельными шагами workflow
 
+## Диагностика dashboard action-кнопок
+
+- Ошибки action-кнопок теперь возвращаются обратно на dashboard как понятное сообщение, а не как голый `500`.
+- Для отключённых кнопок dashboard показывает причину прямо под кнопкой.
+- На Windows запуск `.cmd`, `.bat` и `.ps1` идёт через Windows-safe detached spawn path, чтобы избежать `spawn EINVAL` для `start-mcp` и похожих действий.
+
 ## Диагностика MCP timeout
 
 - Проверьте `npm run status -- --project "<path>"`.
 - Затем проверьте `npm run doctor -- --project "<path>"`.
-- Если зависает tool-call с проверкой команд, повторите через `run_tests` с `timeoutMs`.
+- Если зависает tool-call с проверкой команды, повторите через `run_tests` с `timeoutMs`.
 - Если вывод команды слишком большой, смотрите сокращённый `stdout/stderr` и признак truncation.
-
-## Диагностика EPERM и ENOENT
-
-- Сверьте `.codex/state/tasks.json`, `.codex/tasks` и `.codex/reports`.
-- Если missing task file ломает approve/status flow, task markdown теперь можно восстановить из state.
-- Если report существует, но Review Gate его не видит, проверьте заголовок файла и кодировку UTF-8/UTF-8 BOM.
-
-## Что значит Doctor NOT_READY
-
-- Это означает настоящую fail-проверку: нет Git, нет `.codex`, нет `tasks.json`, broken policy или другой блокирующий сбой.
-- Dirty Git должен отображаться отдельно как warning с конкретным объяснением.
 
 ## Как правильно закрывать reported task
 
@@ -130,27 +144,6 @@ npm run codex:run-once -- --project "D:\projects\chatgpt-codex-mcp" --dry-run --
 2. Запустите `npm run review -- --project "<path>" --task <taskId> --write-report`.
 3. Если получен `APPROVABLE`, можно делать approve штатным локальным способом.
 4. Если получен `NEEDS_REVIEW`, сначала разберите `.codex/reports/<taskId>-review.md`.
-
-## Что делать при Review Gate NEEDS_REVIEW
-
-- Смотрите `Warnings`, `Errors` и `Changed Files` в review report.
-- Используйте `status.nextAction` как следующую команду.
-- После исправлений повторите `review`.
-
-## Как проверять Codex CLI и direct execution
-
-- `codex --help`
-- `codex exec --help`
-- `npm run codex:run-once -- --project "<path>" --dry-run`
-
-В dry-run и worker status смотрите:
-
-- `Direct execution enabled`
-- `Direct execution reason`
-- `Config source`
-- `executionState`
-- `last exit code`
-- `last error`
 
 ## Безопасность
 

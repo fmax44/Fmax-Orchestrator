@@ -56,7 +56,7 @@ describe("DashboardService", () => {
     expect(snapshot.components.codexWorker.meta).toContain("Codex CLI: не найден");
   });
 
-  it("renders public IP, city, country, and Codex Worker status", async () => {
+  it("renders public IP, city, country, UTF-8 Russian text, and Codex Worker status", async () => {
     const service = new DashboardService({
       fetchImpl: async (input) => {
         const url = String(input);
@@ -161,7 +161,12 @@ describe("DashboardService", () => {
       "start-codex-worker"
     ]);
 
-    const html = renderDashboardHtml(snapshot, config);
+    const html = renderDashboardHtml(snapshot, config, {
+      flash: {
+        kind: "error",
+        text: "Действие \"start-mcp\" не удалось запустить: example error"
+      }
+    });
     expect(html).toContain("Открыть VPN");
     expect(html).toContain("Город: Moscow");
     expect(html).toContain("Страна: Russia");
@@ -169,5 +174,6 @@ describe("DashboardService", () => {
     expect(html).toContain("Последняя найденная задача");
     expect(html).toContain("Codex CLI");
     expect(html).toContain("workspace-write");
+    expect(html).toContain("Действие &quot;start-mcp&quot; не удалось запустить: example error");
   });
 });

@@ -61,6 +61,13 @@ export interface DashboardSnapshot {
   }>;
 }
 
+export interface DashboardRenderOptions {
+  flash?: {
+    kind: "ok" | "error";
+    text: string;
+  };
+}
+
 export type DashboardActionId =
   | "open-chatgpt"
   | "open-codex"
@@ -373,7 +380,7 @@ export class DashboardService {
   }
 }
 
-export function renderDashboardHtml(snapshot: DashboardSnapshot, config: DashboardConfig): string {
+export function renderDashboardHtml(snapshot: DashboardSnapshot, config: DashboardConfig, options: DashboardRenderOptions = {}): string {
   const refreshSeconds = Math.max(10, config.refreshIntervalSeconds);
   return `<!doctype html>
 <html lang="ru">
@@ -424,6 +431,23 @@ export function renderDashboardHtml(snapshot: DashboardSnapshot, config: Dashboa
     .actions { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); margin: 18px 0 6px; }
     .component-grid, .project-grid { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
     .card { padding: 18px; }
+    .flash {
+      margin: 0 0 18px;
+      padding: 14px 16px;
+      border-radius: 16px;
+      border: 1px solid var(--line);
+      background: #fff8e8;
+    }
+    .flash.error {
+      border-color: #f0b7b9;
+      background: #fff1f1;
+      color: var(--bad);
+    }
+    .flash.ok {
+      border-color: #b9dfc7;
+      background: #effaf2;
+      color: var(--accent);
+    }
     .eyebrow, .muted { color: var(--muted); font-size: 14px; }
     .pill {
       display: inline-flex;
@@ -502,6 +526,7 @@ export function renderDashboardHtml(snapshot: DashboardSnapshot, config: Dashboa
         ${snapshot.actions.map((action) => renderActionButton(action)).join("")}
       </div>
     </section>
+    ${options.flash ? `<div class="flash ${options.flash.kind}">${escapeHtml(options.flash.text)}</div>` : ""}
     <section class="component-grid">
       ${renderComponentCard(snapshot.components.mcpServer)}
       ${renderComponentCard(snapshot.components.tunnel)}
@@ -521,6 +546,7 @@ export function renderDashboardHtml(snapshot: DashboardSnapshot, config: Dashboa
 function renderActionButton(action: DashboardSnapshot["actions"][number]): string {
   return `<form class="action-form" method="POST" action="/action/${encodeURIComponent(action.id)}">
     <button ${action.enabled ? "" : "disabled"} title="${escapeHtml(action.reason ?? "")}">${escapeHtml(action.label)}</button>
+    ${!action.enabled && action.reason ? `<div class="muted">${escapeHtml(action.reason)}</div>` : ""}
   </form>`;
 }
 

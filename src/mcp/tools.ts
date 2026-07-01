@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { spawn } from "node:child_process";
 import path from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { TaskStore } from "../services/taskStore.js";
@@ -21,6 +20,7 @@ import { CodexWorkerService } from "../services/codexWorker.js";
 import { CodexAutonomousRunService } from "../services/codexAutonomousRun.js";
 import { loadDashboardConfig, type DashboardCommandConfig } from "../services/dashboardConfig.js";
 import { toolNames } from "./toolNames.js";
+import { launchDetachedProcess } from "../utils/processLaunch.js";
 
 export { toolNames };
 
@@ -242,7 +242,7 @@ export function createToolHandlers(
         extraArgs.push("--poll-interval-ms", String(input.pollIntervalMs));
       }
 
-      startDetachedCommand(command, extraArgs);
+      await startDetachedCommand(command, extraArgs);
       return {
         started: true,
         command: [command.command, ...(command.args ?? []), ...extraArgs].join(" "),
@@ -677,14 +677,9 @@ function normalizeToolError(error: unknown): { message: string; code?: string; r
   };
 }
 
-function startDetachedCommand(command: DashboardCommandConfig, extraArgs: string[] = []): void {
-  spawn(command.command, [...(command.args ?? []), ...extraArgs], {
-    cwd: command.cwd ?? process.cwd(),
-    env: {
-      ...process.env,
-      ...command.env
-    },
-    detached: true,
-    stdio: "ignore"
-  }).unref();
+async function startDetachedCommand(command: DashboardCommandConfig, extraArgs: string[] = []): Promise<void> {
+  await launchDetachedProcess({
+    ...command,
+    args: [...(command.args ?? []), ...extraArgs]
+  });
 }
