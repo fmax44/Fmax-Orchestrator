@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { execa, type ExecaError } from "execa";
 import { CodexNextService } from "./codexNext.js";
+import { TaskStore } from "./taskStore.js";
 import type { DashboardProjectConfig, DashboardWorkerConfig } from "./dashboardConfig.js";
 import { sanitizeOutput } from "../utils/safeExec.js";
 
@@ -461,7 +462,14 @@ async function resolveCommandPath(command: string): Promise<string | undefined> 
 }
 
 async function reportExists(projectPath: string, reportPath: string): Promise<boolean> {
-  return stat(path.join(projectPath, reportPath))
+  const taskId = path.basename(reportPath).match(/^(\d{4})-report\.md$/)?.[1];
+  if (!taskId) {
+    return stat(path.join(projectPath, reportPath))
+      .then(() => true)
+      .catch(() => false);
+  }
+
+  return new TaskStore().readReport(projectPath, taskId)
     .then(() => true)
     .catch(() => false);
 }

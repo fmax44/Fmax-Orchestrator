@@ -1,10 +1,11 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { TaskStore } from "./taskStore.js";
 import { ProjectPolicyService } from "./projectPolicy.js";
 import { DoctorService } from "./doctor.js";
 import { TestRunner } from "./testRunner.js";
+import { readUtf8File, stripUtf8Bom, writeUtf8FileAtomic } from "../utils/fileIO.js";
 import { getCodexPaths, toProjectRelative } from "../utils/paths.js";
 
 export type ReviewGateDecision = "APPROVABLE" | "NEEDS_REVIEW" | "BLOCKED";
@@ -63,6 +64,11 @@ export class ReviewGateService {
     const workflow = policy?.workflow;
     const strict = workflow?.strictReviewGate ?? false;
 
+    await this.taskStore.syncReportedTasks(root).catch((error: unknown) => {
+      errors.push(error instanceof Error ? error.message : String(error));
+      return undefined;
+    });
+
     const task = await this.taskStore.getTask(root, options.taskId).catch((error: unknown) => {
       errors.push(error instanceof Error ? error.message : String(error));
       return undefined;
@@ -115,7 +121,7 @@ export class ReviewGateService {
       }
     }
 
-    const requestedChecks = options.checks ?? [];
+    const requestedChecks = await this.resolveRequestedChecks(root, options.taskId, options.checks, policy);
     if (requestedChecks.length === 0) {
       checks.push(warn("required_checks", "No checks were provided."));
       warnings.push("No checks were provided.");
@@ -177,8 +183,37 @@ export class ReviewGateService {
     const paths = getCodexPaths(projectPath);
     await mkdir(paths.reportsDir, { recursive: true });
     const reportPath = path.join(paths.reportsDir, `${result.taskId}-review.md`);
-    await writeFile(reportPath, renderReviewReport(result), "utf8");
+    await writeUtf8FileAtomic(reportPath, renderReviewReport(result));
     return toProjectRelative(projectPath, reportPath);
+  }
+
+  private async resolveRequestedChecks(
+    projectPath: string,
+    taskId: string,
+    explicitChecks: string[] | undefined,
+    policy:
+      | {
+          defaultProfile?: string;
+          requiredChecks?: Record<string, string[]>;
+        }
+      | undefined
+  ): Promise<string[]> {
+    if (explicitChecks && explicitChecks.length > 0) {
+      return explicitChecks;
+    }
+
+    const task = await this.taskStore.getTask(projectPath, taskId).catch(() => undefined);
+    if (task) {
+      const taskPath = path.join(projectPath, task.taskPath);
+      const markdown = await readUtf8File(taskPath).catch(() => undefined);
+      const taskChecks = markdown ? readRequiredChecks(markdown) : [];
+      if (taskChecks.length > 0) {
+        return taskChecks;
+      }
+    }
+
+    const profileKey = policy?.defaultProfile === "docker-compose" ? "docker-compose" : "node";
+    return policy?.requiredChecks?.[profileKey] ?? [];
   }
 }
 
@@ -291,4 +326,26 @@ function addMinutes(isoString: string, minutes: number): string {
   const date = new Date(isoString);
   date.setMinutes(date.getMinutes() + minutes);
   return date.toISOString();
+}
+
+function readRequiredChecks(markdown: string): string[] {
+  const normalized = stripUtf8Bom(markdown).split(/\r?\n/);
+  const start = normalized.findIndex((line) => line.trim() === "## Required Checks");
+  if (start === -1) {
+    return [];
+  }
+
+  const commands: string[] = [];
+  for (const line of normalized.slice(start + 1)) {
+    if (line.startsWith("## ")) {
+      break;
+    }
+
+    const match = line.trim().match(/^- (.+)$/);
+    if (match?.[1]) {
+      commands.push(match[1].trim());
+    }
+  }
+
+  return commands;
 }

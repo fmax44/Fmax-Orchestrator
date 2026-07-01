@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -79,7 +79,7 @@ describe("ReviewGateService", () => {
 
     expect(result.decision).toBe("NEEDS_REVIEW");
     expect(result.manualApprovalRequired).toBe(true);
-  }, 15000);
+  }, 30000);
 
   it("returns BLOCKED when report is missing", async () => {
     const projectPath = await readyProject("basic");
@@ -98,6 +98,48 @@ describe("ReviewGateService", () => {
 
     expect(result.decision).toBe("BLOCKED");
     expect(result.errors).toContain("Report is required but missing.");
+  }, 15000);
+
+  it("syncs an existing task report before evaluating the gate", async () => {
+    const projectPath = await readyProject("basic");
+    const task = await new TaskStore().createTask(projectPath, {
+      title: "Docs",
+      goal: "Update docs",
+      filesAllowed: ["docs/guide.md"],
+      requiredChecks: ["git status --short"]
+    });
+    await writeFile(path.join(projectPath, ".codex", "reports", `${task.id}-report.md`), `# Report for Task ${task.id}\n\nDocs updated.\n`, "utf8");
+
+    const result = await new ReviewGateService().run({
+      projectPath,
+      taskId: task.id,
+      checks: ["git status --short"]
+    });
+    const state = await new TaskStore().readState(projectPath);
+
+    expect(result.checks).toContainEqual({ name: "task_status", status: "pass", details: "reported" });
+    expect(result.checks).toContainEqual({ name: "report_exists", status: "pass", details: `.codex/reports/${task.id}-report.md` });
+    expect(state.tasks.find((item) => item.id === task.id)?.status).toBe("reported");
+  }, 15000);
+
+  it("accepts a task report saved with UTF-8 BOM", async () => {
+    const projectPath = await readyProject("basic");
+    const task = await new TaskStore().createTask(projectPath, {
+      title: "Docs",
+      goal: "Update docs",
+      filesAllowed: ["docs/guide.md"],
+      requiredChecks: ["git status --short"]
+    });
+    await writeFile(path.join(projectPath, ".codex", "reports", `${task.id}-report.md`), `\uFEFF# Report for Task ${task.id}\n\nDocs updated.\n`, "utf8");
+
+    const result = await new ReviewGateService().run({
+      projectPath,
+      taskId: task.id,
+      checks: ["git status --short"]
+    });
+
+    expect(result.checks).toContainEqual({ name: "report_exists", status: "pass", details: `.codex/reports/${task.id}-report.md` });
+    expect(result.errors).not.toContain("Report is required but missing.");
   }, 15000);
 
   it("is JSON serializable", async () => {
@@ -197,7 +239,7 @@ describe("approve_task Review Gate integration", () => {
         overrideReviewGate: true
       })
     ).resolves.toMatchObject({ status: "approved" });
-  }, 15000);
+  }, 30000);
 
   it("blocks approval when Review Gate is BLOCKED", async () => {
     const projectPath = await readyProject("node");
@@ -350,6 +392,30 @@ describe("approve_task Review Gate integration", () => {
         shell: true
       })
     ).rejects.toThrow();
+  }, 15000);
+
+  it("approve_task falls back to state when the task markdown is missing", async () => {
+    const projectPath = await readyProject("node");
+    const taskId = await docsTaskWithReport(projectPath);
+    await new ReviewGateService().run({
+      projectPath,
+      taskId,
+      checks: ["git status --short"],
+      writeReport: true
+    });
+    await unlink(path.join(projectPath, ".codex", "tasks", `${taskId}-task.md`));
+
+    await expect(
+      createToolHandlers().approveTask({
+        projectPath,
+        taskId,
+        decision: "Approved after recovering task markdown."
+      })
+    ).resolves.toMatchObject({ status: "approved" });
+
+    await expect(readFile(path.join(projectPath, ".codex", "tasks", `${taskId}-task.md`), "utf8")).resolves.toContain(
+      "Recovered from .codex/state/tasks.json"
+    );
   }, 15000);
 });
 

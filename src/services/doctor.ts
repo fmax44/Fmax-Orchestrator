@@ -139,7 +139,7 @@ export class DoctorService {
     const checks: DiagnosticCheck[] = [
       health.exists ? pass("project exists", health.projectPath) : fail("project exists", health.projectPath),
       health.isGitRepo ? pass("git repository detected", "") : fail("git repository detected", "Project is not a Git repository."),
-      health.gitStatusClean ? pass("git status clean", "") : fail("git status clean", "Working tree is not clean."),
+      health.gitStatusClean ? pass("git status clean", "") : warn("git status clean", "Working tree is not clean."),
       health.codexDirExists ? pass(".codex exists", "") : fail(".codex exists", "Run bootstrap first."),
       health.tasksStateExists ? pass(".codex/state/tasks.json exists", "") : fail(".codex/state/tasks.json exists", "Run bootstrap first."),
       health.gitignoreHasCodex ? pass(".codex ignored by Git", "") : fail(".codex ignored by Git", ".gitignore does not contain .codex/."),

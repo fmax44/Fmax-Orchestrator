@@ -53,6 +53,7 @@ export interface DashboardConfig {
     mcpServer?: DashboardCommandConfig;
     tunnel?: DashboardCommandConfig;
     codexWorker?: DashboardCommandConfig;
+    [key: string]: DashboardCommandConfig | undefined;
   };
   health: DashboardHealthConfig;
   worker: DashboardWorkerConfig;
@@ -162,7 +163,11 @@ function mergeDashboardConfig(defaults: DashboardConfig, override: Partial<Dashb
     },
     worker: {
       ...defaults.worker,
-      ...override.worker
+      ...override.worker,
+      directExecution: {
+        ...defaults.worker.directExecution,
+        ...override.worker?.directExecution
+      }
     },
     managedProjects: override.managedProjects ?? defaults.managedProjects
   };

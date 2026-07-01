@@ -1,9 +1,10 @@
-import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, stat } from "node:fs/promises";
 import path from "node:path";
 import type { CreateTaskData, ReviewGateProvenance, TaskRecord, TaskState } from "../domain/task.js";
 import type { TaskReport } from "../domain/report.js";
 import type { TaskStatus } from "../domain/status.js";
 import { isTaskStatus } from "../domain/status.js";
+import { readUtf8File, stripUtf8Bom, writeUtf8FileAtomic } from "../utils/fileIO.js";
 import { checklist, markdownList, replaceMarkdownSection } from "../utils/markdown.js";
 import { ensureCodexStructure, ensureRelativeInsideProject, toProjectRelative } from "../utils/paths.js";
 import { ArchitectLog } from "./architectLog.js";
@@ -39,7 +40,7 @@ export class TaskStore {
       updatedAt: now
     };
 
-    await writeFile(taskPath, this.renderTaskMarkdown(record, input), "utf8");
+    await writeUtf8FileAtomic(taskPath, this.renderTaskMarkdown(record, input));
     await this.writeState(projectPath, { tasks: [...state.tasks, record] });
     await this.architectLog.record(projectPath, {
       taskId: id,
@@ -94,7 +95,7 @@ export class TaskStore {
   }
 
   async listTasks(projectPath: string, status?: TaskStatus): Promise<TaskRecord[]> {
-    const state = await this.readState(projectPath);
+    const state = { tasks: await this.syncReportedTasks(projectPath) };
     return status ? state.tasks.filter((task) => task.status === status) : state.tasks;
   }
 
@@ -108,21 +109,30 @@ export class TaskStore {
         }
 
         const reportPath = ensureRelativeInsideProject(paths.root, task.reportPath);
-        const reportMarkdown = await readFile(reportPath, "utf8").catch(() => undefined);
+        const reportMarkdown = await readUtf8File(reportPath).catch(() => undefined);
 
         if (!reportMarkdown || !isTaskReportForTask(reportMarkdown, task.id)) {
           return task;
         }
 
         const taskFile = ensureRelativeInsideProject(paths.root, task.taskPath);
-        const markdown = await readFile(taskFile, "utf8");
+        const markdown = await readUtf8File(taskFile).catch((error: unknown) => {
+          if (isNodeError(error) && error.code === "ENOENT") {
+            return undefined;
+          }
+
+          throw error;
+        });
         const updated: TaskRecord = {
           ...task,
           status: "reported",
           updatedAt: new Date().toISOString()
         };
 
-        await writeFile(taskFile, replaceMarkdownSection(markdown, "Status", "reported"), "utf8");
+        if (markdown !== undefined) {
+          await writeUtf8FileAtomic(taskFile, replaceMarkdownSection(markdown, "Status", "reported"));
+        }
+
         return updated;
       })
     );
@@ -147,9 +157,17 @@ export class TaskStore {
     const current = state.tasks[index];
     const updated: TaskRecord = { ...current, status, updatedAt: new Date().toISOString() };
     const taskFile = ensureRelativeInsideProject(paths.root, current.taskPath);
-    const markdown = await readFile(taskFile, "utf8");
+    const markdown = await this.readTaskMarkdownWithFallback(paths.root, current);
+    const nextMarkdown = replaceMarkdownSection(markdown, "Status", status);
 
-    await writeFile(taskFile, replaceMarkdownSection(markdown, "Status", status), "utf8");
+    try {
+      await writeUtf8FileAtomic(taskFile, nextMarkdown);
+    } catch (error: unknown) {
+      if (!isRetriableTaskFileSyncError(error)) {
+        throw error;
+      }
+    }
+
     await this.writeState(projectPath, {
       tasks: state.tasks.map((task, taskIndex) => (taskIndex === index ? updated : task))
     });
@@ -161,7 +179,7 @@ export class TaskStore {
     const paths = await ensureCodexStructure(projectPath);
     const task = await this.getTask(projectPath, taskId);
     const reportPath = ensureRelativeInsideProject(paths.root, task.reportPath);
-    const markdown = await readFile(reportPath, "utf8").catch((error: unknown) => {
+    const markdown = await readUtf8File(reportPath).catch((error: unknown) => {
       if (isNodeError(error) && error.code === "ENOENT") {
         throw new Error(`Report not found for task ${taskId}: ${task.reportPath}`);
       }
@@ -229,7 +247,7 @@ export class TaskStore {
       ""
     ].join("\n");
 
-    await writeFile(fixPath, fixMarkdown, "utf8");
+    await writeUtf8FileAtomic(fixPath, fixMarkdown);
     await this.architectLog.record(projectPath, {
       taskId,
       type: "rejection",
@@ -270,8 +288,9 @@ export class TaskStore {
     };
 
     if (taskPath) {
-      const markdown = await readFile(ensureRelativeInsideProject(paths.root, taskPath), "utf8");
-      await writeFile(ensureRelativeInsideProject(paths.root, taskPath), replaceMarkdownSection(markdown, "Status", "archived"), "utf8");
+      const absoluteTaskPath = ensureRelativeInsideProject(paths.root, taskPath);
+      const markdown = await readUtf8File(absoluteTaskPath);
+      await writeUtf8FileAtomic(absoluteTaskPath, replaceMarkdownSection(markdown, "Status", "archived"));
     }
 
     await this.writeState(projectPath, {
@@ -293,7 +312,7 @@ export class TaskStore {
   }
 
   private async readStateFile(statePath: string): Promise<TaskState> {
-    const raw = await readFile(statePath, "utf8");
+    const raw = stripUtf8Bom(await readFile(statePath, "utf8"));
     const parsed = JSON.parse(raw) as TaskState;
 
     if (!Array.isArray(parsed.tasks)) {
@@ -310,7 +329,7 @@ export class TaskStore {
   }
 
   private async writeStateFile(statePath: string, state: TaskState): Promise<void> {
-    await writeFile(statePath, JSON.stringify(state, null, 2) + "\n", "utf8");
+    await writeUtf8FileAtomic(statePath, JSON.stringify(state, null, 2) + "\n");
   }
 
   private async nextTaskId(projectPath: string, tasks: TaskRecord[]): Promise<string> {
@@ -396,10 +415,31 @@ export class TaskStore {
       ""
     ].join("\n");
   }
+
+  private async readTaskMarkdownWithFallback(projectPath: string, task: TaskRecord): Promise<string> {
+    const taskFile = ensureRelativeInsideProject(projectPath, task.taskPath);
+    const markdown = await readUtf8File(taskFile).catch((error: unknown) => {
+      if (isNodeError(error) && error.code === "ENOENT") {
+        return undefined;
+      }
+
+      throw error;
+    });
+
+    if (markdown !== undefined) {
+      return markdown;
+    }
+
+    return renderRecoveredTaskMarkdown(task);
+  }
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error;
+}
+
+function isRetriableTaskFileSyncError(error: unknown): boolean {
+  return isNodeError(error) && (error.code === "EPERM" || error.code === "EACCES" || error.code === "EBUSY");
 }
 
 async function moveIfExists(projectPath: string, relativePath: string, archiveDir: string): Promise<string | undefined> {
@@ -423,9 +463,33 @@ function parseTaskId(name: string): number | undefined {
 }
 
 function isTaskReportForTask(markdown: string, taskId: string): boolean {
-  return new RegExp(`^# Report for Task ${escapeRegExp(taskId)}\\b`, "m").test(markdown);
+  return new RegExp(`^# Report for Task ${escapeRegExp(taskId)}\\b`, "m").test(stripUtf8Bom(markdown));
 }
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function renderRecoveredTaskMarkdown(task: TaskRecord): string {
+  return [
+    `# Task ${task.id}: ${task.title}`,
+    "",
+    "## Status",
+    "",
+    task.status,
+    "",
+    "## Goal",
+    "",
+    "Recovered from .codex/state/tasks.json after the original task markdown became unavailable.",
+    "",
+    "## Summary",
+    "",
+    `Recovered task file for ${task.id}.`,
+    "",
+    "## Paths",
+    "",
+    `- taskPath: ${task.taskPath}`,
+    `- reportPath: ${task.reportPath}`,
+    ""
+  ].join("\n");
 }

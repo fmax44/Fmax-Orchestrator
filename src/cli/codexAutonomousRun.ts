@@ -16,6 +16,7 @@ try {
     pollIntervalMs: args.pollIntervalMs ?? loaded.config.worker.pollIntervalMs,
     waitTimeoutMs: args.timeoutMs,
     dryRun: args.dryRun,
+    localConfigExists: loaded.localConfigExists,
     directExecution: loaded.config.worker.directExecution
   });
 
@@ -38,15 +39,19 @@ function formatAutonomousRunText(result: {
   executionState: string;
   nextRecommendedAction: string;
   directExecutionEnabled: boolean;
+  directExecutionReason: string;
   dryRun: boolean;
   message: string;
   plannedCommand?: string;
   changedFilesSummary: string[];
+  configSource?: "local" | "default";
 }): string {
   return [
     "Controlled Codex autonomous run:",
     `Execution state: ${result.executionState}`,
     `Direct execution enabled: ${result.directExecutionEnabled ? "yes" : "no"}`,
+    `Direct execution reason: ${result.directExecutionReason}`,
+    result.configSource ? `Config source: ${result.configSource}` : undefined,
     `Dry-run: ${result.dryRun ? "yes" : "no"}`,
     `Task: ${result.taskId ?? "none"}`,
     `Task path: ${result.taskPath ?? "n/a"}`,

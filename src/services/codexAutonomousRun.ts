@@ -1,3 +1,4 @@
+import path from "node:path";
 import { CodexNextService, type CodexNextResult } from "./codexNext.js";
 import { CodexWorkerService, type CodexCliStatusSnapshot, type CodexWorkerDirectExecutionConfig, type CodexWorkerStatus } from "./codexWorker.js";
 import { GitService } from "./gitService.js";
@@ -8,10 +9,17 @@ export type CodexAutonomousExecutionState =
   | "blocked"
   | "dry_run"
   | "waiting_for_report"
+  | "timeout"
+  | "report_missing"
   | "report_detected"
   | "error";
 
-export type CodexAutonomousNextAction = "run_review_gate" | "inspect_diff" | "fix_blocker";
+export type CodexAutonomousNextAction =
+  | "run_review_gate"
+  | "inspect_diff"
+  | "fix_blocker"
+  | "inspect_worker_output"
+  | "manual_codex_run";
 
 export interface CodexAutonomousRunResult {
   projectPath?: string;
@@ -23,12 +31,14 @@ export interface CodexAutonomousRunResult {
   changedFilesSummary: string[];
   nextRecommendedAction: CodexAutonomousNextAction;
   directExecutionEnabled: boolean;
+  directExecutionReason: string;
   dryRun: boolean;
   message: string;
   plannedCommand?: string;
   workerState?: CodexWorkerStatus["state"];
   workerMessage?: string;
   codexCli?: CodexCliStatusSnapshot;
+  configSource?: "local" | "default";
 }
 
 export interface CodexAutonomousRunOptions {
@@ -39,6 +49,7 @@ export interface CodexAutonomousRunOptions {
   pollIntervalMs?: number;
   waitTimeoutMs?: number;
   dryRun?: boolean;
+  localConfigExists?: boolean;
   directExecution: Partial<CodexWorkerDirectExecutionConfig>;
 }
 
@@ -74,8 +85,12 @@ export class CodexAutonomousRunService {
         changedFilesSummary: [],
         nextRecommendedAction: "fix_blocker",
         directExecutionEnabled: directExecution.enabled,
+        directExecutionReason: directExecution.enabled
+          ? "direct execution is enabled by worker config, but there is no pending task to run."
+          : "direct execution is disabled by worker config, and there is no pending task to run.",
         dryRun: Boolean(options.dryRun),
-        message: "No pending task is available for an autonomous Codex run."
+        message: "No pending task is available for an autonomous Codex run.",
+        configSource: options.localConfigExists ? "local" : "default"
       };
     }
 
@@ -95,9 +110,11 @@ export class CodexAutonomousRunService {
         changedFilesSummary: await this.changedFilesSummary(pending.project.path),
         nextRecommendedAction: "fix_blocker",
         directExecutionEnabled: false,
+        directExecutionReason: "worker.directExecution.enabled is false in the loaded dashboard config.",
         dryRun: Boolean(options.dryRun),
         message: "Direct execution is disabled. Enable worker.directExecution.enabled before asking Codex to run the next pending task autonomously.",
-        plannedCommand
+        plannedCommand,
+        configSource: options.localConfigExists ? "local" : "default"
       };
     }
 
@@ -110,12 +127,16 @@ export class CodexAutonomousRunService {
         changedFilesSummary: await this.changedFilesSummary(pending.project.path),
         nextRecommendedAction: "fix_blocker",
         directExecutionEnabled: true,
+        directExecutionReason: runtime.found
+          ? "Codex CLI was found, but codex exec is unavailable in the current runtime."
+          : "Codex CLI was not found in the current runtime.",
         dryRun: Boolean(options.dryRun),
         message: runtime.found
           ? "Codex CLI is present, but codex exec is not available for the worker runtime."
           : "Codex CLI is not available for the worker runtime.",
         plannedCommand,
-        codexCli: runtime
+        codexCli: runtime,
+        configSource: options.localConfigExists ? "local" : "default"
       };
     }
 
@@ -127,10 +148,12 @@ export class CodexAutonomousRunService {
         changedFilesSummary: await this.changedFilesSummary(pending.project.path),
         nextRecommendedAction: "fix_blocker",
         directExecutionEnabled: true,
+        directExecutionReason: "Direct execution is enabled in config, but dry-run prevented codex exec from running.",
         dryRun: true,
         message: "Dry-run mode is enabled. codex exec was not invoked.",
         plannedCommand,
-        codexCli: runtime
+        codexCli: runtime,
+        configSource: options.localConfigExists ? "local" : "default"
       };
     }
 
@@ -149,7 +172,9 @@ export class CodexAutonomousRunService {
         nextRecommendedAction: "run_review_gate",
         directExecutionEnabled: true,
         dryRun: false,
-        changedFilesSummary: await this.changedFilesSummary(pending.project.path)
+        changedFilesSummary: await this.changedFilesSummary(pending.project.path),
+        directExecutionReason: "Direct execution ran and the task report was detected.",
+        configSource: options.localConfigExists ? "local" : "default"
       });
     }
 
@@ -159,7 +184,9 @@ export class CodexAutonomousRunService {
         nextRecommendedAction: "fix_blocker",
         directExecutionEnabled: true,
         dryRun: false,
-        changedFilesSummary: await this.changedFilesSummary(pending.project.path)
+        changedFilesSummary: await this.changedFilesSummary(pending.project.path),
+        directExecutionReason: "Direct execution ran, but the worker returned an error state.",
+        configSource: options.localConfigExists ? "local" : "default"
       });
     }
 
@@ -181,7 +208,9 @@ export class CodexAutonomousRunService {
           nextRecommendedAction: "run_review_gate",
           directExecutionEnabled: true,
           dryRun: false,
-          changedFilesSummary: await this.changedFilesSummary(pending.project.path)
+          changedFilesSummary: await this.changedFilesSummary(pending.project.path),
+          directExecutionReason: "Direct execution ran and the task report was detected.",
+          configSource: options.localConfigExists ? "local" : "default"
         });
       }
 
@@ -191,17 +220,24 @@ export class CodexAutonomousRunService {
           nextRecommendedAction: "fix_blocker",
           directExecutionEnabled: true,
           dryRun: false,
-          changedFilesSummary: await this.changedFilesSummary(pending.project.path)
+          changedFilesSummary: await this.changedFilesSummary(pending.project.path),
+          directExecutionReason: "Direct execution ran, but the worker returned an error state.",
+          configSource: options.localConfigExists ? "local" : "default"
         });
       }
     }
 
     return this.resultFromWorkerStatus(status, {
-      executionState: "waiting_for_report",
-      nextRecommendedAction: "inspect_diff",
+      executionState: status.codexCli.lastExitCode === 0 ? "report_missing" : "timeout",
+      nextRecommendedAction: status.codexCli.lastExitCode === 0 ? "inspect_worker_output" : "manual_codex_run",
       directExecutionEnabled: true,
       dryRun: false,
-      changedFilesSummary: await this.changedFilesSummary(pending.project.path)
+      changedFilesSummary: await this.changedFilesSummary(pending.project.path),
+      directExecutionReason: status.codexCli.lastExitCode === 0
+        ? "codex exec finished successfully, but the expected report was not detected."
+        : "codex exec did not reach a successful terminal report-detected state before timeout.",
+      configSource: options.localConfigExists ? "local" : "default",
+      messageOverride: buildTimeoutMessage(status, waitTimeoutMs)
     });
   }
 
@@ -236,8 +272,11 @@ export class CodexAutonomousRunService {
       executionState: CodexAutonomousExecutionState;
       nextRecommendedAction: CodexAutonomousNextAction;
       directExecutionEnabled: boolean;
+      directExecutionReason: string;
       dryRun: boolean;
       changedFilesSummary: string[];
+      configSource?: "local" | "default";
+      messageOverride?: string;
     }
   ): CodexAutonomousRunResult {
     return {
@@ -250,11 +289,13 @@ export class CodexAutonomousRunService {
       changedFilesSummary: input.changedFilesSummary,
       nextRecommendedAction: input.nextRecommendedAction,
       directExecutionEnabled: input.directExecutionEnabled,
+      directExecutionReason: input.directExecutionReason,
       dryRun: input.dryRun,
-      message: status.message,
+      message: input.messageOverride ?? status.message,
       workerState: status.state,
       workerMessage: status.message,
-      codexCli: status.codexCli
+      codexCli: status.codexCli,
+      configSource: input.configSource
     };
   }
 }
@@ -264,7 +305,8 @@ function resolveProjects(projects: DashboardProjectConfig[], projectPath: string
     return projects;
   }
 
-  const selected = projects.filter((project) => project.path === projectPath);
+  const selectedProjectPath = normalizeProjectPath(projectPath);
+  const selected = projects.filter((project) => normalizeProjectPath(project.path) === selectedProjectPath);
   if (selected.length === 0) {
     throw new Error(`Managed project was not found in config: ${projectPath}`);
   }
@@ -289,4 +331,21 @@ function buildPlannedCommand(directExecution: CodexWorkerDirectExecutionConfig):
 
 function delay(timeoutMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, timeoutMs));
+}
+
+function normalizeProjectPath(projectPath: string): string {
+  const resolved = path.resolve(projectPath);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+function buildTimeoutMessage(status: CodexWorkerStatus, waitTimeoutMs: number): string {
+  const taskId = status.currentTask?.taskId ?? "unknown";
+  const reportPath = status.currentTask?.reportPath ?? "the expected report path";
+  const waitedMs = Math.max(0, waitTimeoutMs);
+
+  if (status.codexCli.lastExitCode === 0) {
+    return `codex exec finished for task ${taskId}, but ${reportPath} was not detected within ${waitedMs} ms. Inspect the worker output and create the report manually if needed.`;
+  }
+
+  return `Timed out waiting ${waitedMs} ms for report detection for task ${taskId}. Inspect the worker output or run Codex manually before retrying.`;
 }

@@ -212,16 +212,18 @@ export function createToolHandlers(
     },
     async codexAutonomousRun(input) {
       const loaded = await loadDashboardConfig(process.cwd());
+      const projects = input.projectPath
+        ? selectAutonomousRunProjects(loaded.config.managedProjects, input.projectPath)
+        : loaded.config.managedProjects;
       return codexAutonomousRunService.run({
-        projects: input.projectPath
-          ? [{ name: path.basename(input.projectPath), path: input.projectPath }]
-          : loaded.config.managedProjects,
+        projects,
         projectPath: input.projectPath,
         statusFilePath: loaded.config.worker.statusFilePath,
         pidFilePath: loaded.config.worker.pidFilePath,
         pollIntervalMs: input.pollIntervalMs ?? loaded.config.worker.pollIntervalMs,
         waitTimeoutMs: input.timeoutMs,
         dryRun: input.dryRun,
+        localConfigExists: loaded.localConfigExists,
         directExecution: loaded.config.worker.directExecution
       });
     },
@@ -263,6 +265,24 @@ export function createToolHandlers(
       return { taskId: task.id, taskPath: task.taskPath, status: task.status };
     }
   };
+}
+
+function selectAutonomousRunProjects(
+  projects: Array<{ name: string; path: string }>,
+  projectPath: string
+): Array<{ name: string; path: string }> {
+  const normalizedInput = normalizeManagedProjectPath(projectPath);
+  const matched = projects.filter((project) => normalizeManagedProjectPath(project.path) === normalizedInput);
+  if (matched.length > 0) {
+    return matched;
+  }
+
+  return [{ name: path.basename(projectPath), path: projectPath }];
+}
+
+function normalizeManagedProjectPath(projectPath: string): string {
+  const resolved = path.resolve(projectPath);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
 async function logOperation(
@@ -317,7 +337,7 @@ export function registerTools(server: McpServer, handlers = createToolHandlers()
         format: z.enum(["json", "text"]).default("json")
       }
     },
-    async (args) => jsonResult(await handlers.reviewGate(args))
+    async (args) => toolResult(() => handlers.reviewGate(args))
   );
 
   server.registerTool(
@@ -367,7 +387,7 @@ export function registerTools(server: McpServer, handlers = createToolHandlers()
         taskId: z.string().optional()
       }
     },
-    async (args) => jsonResult(await handlers.getTaskStatus(args))
+    async (args) => toolResult(() => handlers.getTaskStatus(args))
   );
 
   server.registerTool(
@@ -380,7 +400,7 @@ export function registerTools(server: McpServer, handlers = createToolHandlers()
         taskId: z.string().min(1)
       }
     },
-    async (args) => jsonResult(await handlers.readReport(args))
+    async (args) => toolResult(() => handlers.readReport(args))
   );
 
   server.registerTool(
@@ -407,7 +427,7 @@ export function registerTools(server: McpServer, handlers = createToolHandlers()
         timeoutMs: z.number().int().positive().optional()
       }
     },
-    async (args) => jsonResult(await handlers.runTests(args))
+    async (args) => toolResult(() => handlers.runTests(args))
   );
 
   server.registerTool(
@@ -424,7 +444,7 @@ export function registerTools(server: McpServer, handlers = createToolHandlers()
         forceReason: z.string().default("")
       }
     },
-    async (args) => jsonResult(await handlers.approveTask(args))
+    async (args) => toolResult(() => handlers.approveTask(args))
   );
 
   server.registerTool(
@@ -455,7 +475,7 @@ export function registerTools(server: McpServer, handlers = createToolHandlers()
         taskId: z.string().optional()
       }
     },
-    async (args) => jsonResult(await handlers.relayStatus(args))
+    async (args) => toolResult(() => handlers.relayStatus(args))
   );
 
   server.registerTool(
@@ -470,7 +490,7 @@ export function registerTools(server: McpServer, handlers = createToolHandlers()
         pollIntervalMs: z.number().int().positive().optional()
       }
     },
-    async (args) => jsonResult(await handlers.codexNext(args))
+    async (args) => toolResult(() => handlers.codexNext(args))
   );
 
   server.registerTool(
@@ -485,7 +505,7 @@ export function registerTools(server: McpServer, handlers = createToolHandlers()
         dryRun: z.boolean().default(false)
       }
     },
-    async (args) => jsonResult(await handlers.codexAutonomousRun(args))
+    async (args) => toolResult(() => handlers.codexAutonomousRun(args))
   );
 
   server.registerTool(
@@ -584,7 +604,7 @@ export function registerTools(server: McpServer, handlers = createToolHandlers()
         allowComposeConfigOutput: z.boolean().default(false)
       }
     },
-    async (args) => jsonResult(await handlers.doctor(args))
+    async (args) => toolResult(() => handlers.doctor(args))
   );
 
   server.registerTool(
@@ -615,7 +635,7 @@ export function registerTools(server: McpServer, handlers = createToolHandlers()
         taskId: z.string().optional()
       }
     },
-    async (args) => jsonResult(await handlers.projectStatus(args))
+    async (args) => toolResult(() => handlers.projectStatus(args))
   );
 }
 
@@ -627,6 +647,33 @@ function jsonResult(value: unknown) {
         text: JSON.stringify(value, null, 2)
       }
     ]
+  };
+}
+
+async function toolResult(action: () => Promise<unknown>) {
+  try {
+    return jsonResult(await action());
+  } catch (error: unknown) {
+    return jsonResult({
+      ok: false,
+      error: normalizeToolError(error)
+    });
+  }
+}
+
+function normalizeToolError(error: unknown): { message: string; code?: string; retryable: boolean } {
+  if (error instanceof Error) {
+    const nodeError = error as NodeJS.ErrnoException;
+    return {
+      message: error.message,
+      code: typeof nodeError.code === "string" ? nodeError.code : undefined,
+      retryable: nodeError.code === "EPERM" || nodeError.code === "EBUSY" || nodeError.code === "ETIMEDOUT"
+    };
+  }
+
+  return {
+    message: String(error),
+    retryable: false
   };
 }
 

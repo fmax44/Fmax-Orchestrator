@@ -1,4 +1,3 @@
-import { stat } from "node:fs/promises";
 import path from "node:path";
 import { TaskStore } from "./taskStore.js";
 import { type TaskRecord } from "../domain/task.js";
@@ -39,12 +38,12 @@ export class CodexNextService {
     await this.taskStore.syncReportedTasks(projectPath);
     const pendingTasks = await this.taskStore.listTasks(projectPath, "pending");
     const reportedTasks = await this.taskStore.listTasks(projectPath, "reported");
-    const task = pendingTasks[0];
+    const task = pendingTasks.at(-1);
     const timeoutMs = options.timeoutMs ?? 300_000;
     const pollIntervalMs = options.pollIntervalMs ?? 2_000;
 
     if (!task) {
-      const reportedTask = reportedTasks[0];
+      const reportedTask = reportedTasks.at(-1);
       return {
         projectPath,
         task: reportedTask
@@ -73,15 +72,14 @@ export class CodexNextService {
       };
     }
 
-    const reportAbsolutePath = path.join(projectPath, task.reportPath);
-    let reportDetected = await exists(reportAbsolutePath);
+    let reportDetected = await this.hasValidatedReport(projectPath, task.id);
     let timedOut = false;
 
     if (options.watch && !reportDetected) {
       const deadline = Date.now() + timeoutMs;
       while (Date.now() < deadline) {
         await delay(pollIntervalMs);
-        reportDetected = await exists(reportAbsolutePath);
+        reportDetected = await this.hasValidatedReport(projectPath, task.id);
         if (reportDetected) {
           await this.taskStore.updateStatus(projectPath, task.id, "reported");
           break;
@@ -113,6 +111,12 @@ export class CodexNextService {
         timedOut
       }
     };
+  }
+
+  private async hasValidatedReport(projectPath: string, taskId: string): Promise<boolean> {
+    return this.taskStore.readReport(projectPath, taskId)
+      .then(() => true)
+      .catch(() => false);
   }
 }
 
@@ -165,12 +169,6 @@ function renderCodexInstruction(task: TaskRecord): string {
     "4. Do not approve the task automatically.",
     "5. Stop after the report is ready."
   ].join("\n");
-}
-
-async function exists(filePath: string): Promise<boolean> {
-  return stat(filePath)
-    .then(() => true)
-    .catch(() => false);
 }
 
 function delay(timeoutMs: number): Promise<void> {

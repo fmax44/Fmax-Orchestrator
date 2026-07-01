@@ -89,6 +89,8 @@ export interface ProjectStatusResult {
     createdAt?: string;
     validUntil?: string;
     expired: boolean;
+    invalidReason?: string;
+    blockers?: string[];
   };
   recommendedAction: ProjectRecommendedAction;
   waitingFor: RelayWaitingFor;
@@ -149,8 +151,13 @@ export class ProjectStatusService {
       : undefined;
     const paths = getCodexPaths(root);
     const latestSmokeReport = smoke?.reportPath ?? (await latestFile(paths.root, path.join(paths.codexDir, "smoke", "reports"), ".md"));
-    const selectedTaskReport = selectedTask && (await exists(path.join(root, selectedTask.reportPath))) ? selectedTask.reportPath : undefined;
-    const review = options.includeReview ?? true ? buildReview(selectedTask, policy?.workflow.maxReviewAgeMinutes ?? 60) : undefined;
+    const selectedTaskReport = selectedTask
+      ? await this.taskStore.readReport(root, selectedTask.id).then((report) => report.reportPath).catch(() => undefined)
+      : undefined;
+    const review = options.includeReview ?? true ? buildReview(selectedTask, policy?.workflow.maxReviewAgeMinutes ?? 60, Boolean(selectedTaskReport)) : undefined;
+    if (review?.invalidReason) {
+      warnings.push(review.invalidReason);
+    }
     const latestReviewReport = review?.reviewReportPath ?? (await latestFile(paths.root, paths.reportsDir, "-review.md"));
     const counts = countTasks(state.tasks);
 
@@ -265,6 +272,7 @@ export function formatProjectStatusText(status: ProjectStatusResult): string {
     status.review?.lastReviewHash ? `review hash: ${status.review.lastReviewHash}` : "review hash: none",
     status.review?.validUntil ? `valid until: ${status.review.validUntil}` : "valid until: none",
     status.review ? `expired: ${status.review.expired ? "yes" : "no"}` : "expired: n/a",
+    ...(status.review?.blockers?.length ? ["Review blockers:", ...status.review.blockers.map((blocker) => `- ${blocker}`)] : []),
     "",
     "Recommended next action:",
     status.recommendedAction
@@ -289,7 +297,7 @@ function describeRelay(status: ProjectStatusResult): Pick<ProjectStatusResult, "
       return {
         waitingFor: "user",
         nextActor: "user",
-        nextAction: "Resolve doctor, policy, or Git blockers before continuing the relay workflow."
+        nextAction: describeFixBlockersAction(status)
       };
     case "create_task":
       return {
@@ -351,6 +359,10 @@ function recommend(status: ProjectStatusResult, latestTask: TaskRecord | undefin
     return "rerun_review_gate";
   }
 
+  if (status.review?.latestDecision === "BLOCKED" || status.review?.latestDecision === "NEEDS_REVIEW") {
+    return "fix_blockers";
+  }
+
   if ((latestTask.status === "pending" || latestTask.status === "reported") && !reportExists) {
     return "wait_for_codex_or_request_report";
   }
@@ -375,17 +387,35 @@ function recommend(status: ProjectStatusResult, latestTask: TaskRecord | undefin
 }
 
 function selectCurrentTask(tasks: TaskRecord[]): TaskRecord | undefined {
-  return tasks.find((task) => task.status === "pending")
-    ?? tasks.find((task) => task.status === "reported")
+  return findLastTask(tasks, "pending")
+    ?? findLastTask(tasks, "reported")
     ?? tasks.at(-1);
 }
 
-function buildReview(task: TaskRecord | undefined, maxReviewAgeMinutes: number): ProjectStatusResult["review"] {
+function findLastTask(tasks: TaskRecord[], status: TaskStatus): TaskRecord | undefined {
+  for (let index = tasks.length - 1; index >= 0; index -= 1) {
+    if (tasks[index]?.status === status) {
+      return tasks[index];
+    }
+  }
+
+  return undefined;
+}
+
+function buildReview(task: TaskRecord | undefined, maxReviewAgeMinutes: number, reportExists: boolean): ProjectStatusResult["review"] {
   const provenance = task?.lastReviewGate;
   if (!provenance) {
     return {
       exists: false,
       expired: false
+    };
+  }
+
+  if (reportExists && provenance.errors.includes("Report is required but missing.")) {
+    return {
+      exists: false,
+      expired: false,
+      invalidReason: `Stored Review Gate result for task ${task.id} said the report was missing, but the report now exists. Rerun review_gate.`
     };
   }
 
@@ -400,8 +430,42 @@ function buildReview(task: TaskRecord | undefined, maxReviewAgeMinutes: number):
     reviewReportPath: provenance.reviewReportPath,
     createdAt: provenance.createdAt,
     validUntil: validUntil.toISOString(),
-    expired: Date.now() > validUntil.getTime()
+    expired: Date.now() > validUntil.getTime(),
+    blockers: [...provenance.warnings, ...provenance.errors]
   };
+}
+
+function describeFixBlockersAction(status: ProjectStatusResult): string {
+  const taskId = status.currentTask?.id;
+  const reviewPath = status.review?.reviewReportPath;
+
+  if (status.doctor?.result === "NOT_READY") {
+    const doctorReason = status.errors[0] ?? status.warnings[0] ?? "Unknown doctor blocker.";
+    return `Run npm run doctor -- --project "${status.projectPath}" and resolve: ${doctorReason}`;
+  }
+
+  if (status.review?.latestDecision === "BLOCKED") {
+    const blocker = status.review.blockers?.[0] ?? "Review Gate is blocked.";
+    return taskId
+      ? `Inspect ${reviewPath ?? "the latest review report"} for task ${taskId} and fix: ${blocker}`
+      : `Inspect ${reviewPath ?? "the latest review report"} and fix the Review Gate blocker.`;
+  }
+
+  if (status.review?.latestDecision === "NEEDS_REVIEW") {
+    const blocker = status.review.blockers?.[0] ?? "Review Gate requires manual review.";
+    return taskId
+      ? `Inspect ${reviewPath ?? "the latest review report"} for task ${taskId}, address: ${blocker}, then rerun npm run review -- --project "${status.projectPath}" --task ${taskId} --write-report`
+      : `Inspect ${reviewPath ?? "the latest review report"} and rerun review_gate with the required checks.`;
+  }
+
+  if (status.git.status === "dirty") {
+    const firstFile = status.git.changedFiles[0];
+    return firstFile
+      ? `Review the dirty Git working tree starting with ${firstFile}, then continue the relay workflow.`
+      : "Review the dirty Git working tree, then continue the relay workflow.";
+  }
+
+  return "Resolve doctor, policy, or Git blockers before continuing the relay workflow.";
 }
 
 async function readGitStatus(projectPath: string): Promise<ProjectStatusResult["git"]> {
@@ -469,12 +533,6 @@ async function latestFile(projectPath: string, directory: string, suffix: string
     .sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
 
   return latest ? toProjectRelative(projectPath, latest.filePath) : undefined;
-}
-
-async function exists(filePath: string): Promise<boolean> {
-  return stat(filePath)
-    .then(() => true)
-    .catch(() => false);
 }
 
 function list(items: string[]): string[] {

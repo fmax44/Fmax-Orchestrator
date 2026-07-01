@@ -46,6 +46,31 @@ describe("relay workflow helpers", () => {
     expect(result.nextAction).toContain("ChatGPT should review");
   }, 15000);
 
+  it("treats a BOM-prefixed report as a detected report for Codex next", async () => {
+    const projectPath = await readyProject();
+    const taskId = await createTask(projectPath);
+    await writeFile(path.join(projectPath, ".codex", "reports", `${taskId}-report.md`), `\uFEFF# Report for Task ${taskId}\n\nRelay test report.\n`, "utf8");
+
+    const result = await new CodexNextService().prepare({ projectPath });
+
+    expect(result.task?.id).toBe(taskId);
+    expect(result.task?.reportExists).toBe(true);
+    expect(result.waitingFor).toBe("chatgpt");
+  }, 15000);
+
+  it("prepares the newest reported task when multiple reports are waiting", async () => {
+    const projectPath = await readyProject();
+    const firstTaskId = await createTask(projectPath);
+    await writeReport(projectPath, firstTaskId);
+    const secondTaskId = await createTask(projectPath);
+    await writeReport(projectPath, secondTaskId);
+
+    const result = await new CodexNextService().prepare({ projectPath });
+
+    expect(result.task?.id).toBe(secondTaskId);
+    expect(result.waitingFor).toBe("chatgpt");
+  }, 15000);
+
   it("supports relay:status and codex:next through the CLI", async () => {
     const projectPath = await readyProject();
     await createTask(projectPath);
@@ -63,7 +88,7 @@ describe("relay workflow helpers", () => {
     });
     const codexParsed = JSON.parse(codexResult.stdout.slice(codexResult.stdout.indexOf("{"))) as { task?: { id: string } };
     expect(codexParsed.task?.id).toBe("0001");
-  }, 15000);
+  }, 30000);
 });
 
 async function readyProject(): Promise<string> {

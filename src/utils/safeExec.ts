@@ -7,6 +7,8 @@ export interface CommandResult {
   stdout: string;
   stderr: string;
   timedOut: boolean;
+  durationMs: number;
+  truncated: boolean;
 }
 
 export interface SafeExecOptions {
@@ -33,12 +35,14 @@ export async function safeExec(
 ): Promise<CommandResult> {
   const cwd = await resolveProjectPath(projectPath);
   validateCommand(command, options);
+  const startedAt = Date.now();
 
   try {
     const result = await execaCommand(command, {
       cwd,
       shell: true,
       timeout: options.timeoutMs ?? defaultTimeoutMs,
+      maxBuffer: Math.max(options.maxOutputBytes ?? defaultMaxOutputBytes, defaultMaxOutputBytes) * 4,
       reject: false,
       env: {
         ...process.env,
@@ -46,22 +50,26 @@ export async function safeExec(
       }
     });
 
-    return {
+    return buildCommandResult({
       command,
       exitCode: result.exitCode ?? 0,
-      stdout: sanitizeOutput(result.stdout, options.maxOutputBytes),
-      stderr: sanitizeOutput(result.stderr, options.maxOutputBytes),
-      timedOut: false
-    };
+      stdout: result.stdout,
+      stderr: result.stderr,
+      timedOut: false,
+      durationMs: Date.now() - startedAt,
+      maxOutputBytes: options.maxOutputBytes
+    });
   } catch (error: unknown) {
     const execaError = error as ExecaError;
-    return {
+    return buildCommandResult({
       command,
       exitCode: typeof execaError.exitCode === "number" ? execaError.exitCode : 1,
-      stdout: sanitizeOutput(String(execaError.stdout ?? ""), options.maxOutputBytes),
-      stderr: sanitizeOutput(String(execaError.stderr ?? execaError.message ?? error), options.maxOutputBytes),
-      timedOut: Boolean(execaError.timedOut)
-    };
+      stdout: String(execaError.stdout ?? ""),
+      stderr: buildErrorStderr(execaError, options.timeoutMs ?? defaultTimeoutMs),
+      timedOut: Boolean(execaError.timedOut),
+      durationMs: Date.now() - startedAt,
+      maxOutputBytes: options.maxOutputBytes
+    });
   }
 }
 
@@ -93,4 +101,41 @@ export function sanitizeOutput(output: string, maxOutputBytes = defaultMaxOutput
   }
 
   return `${redacted.slice(0, maxOutputBytes)}\n[output truncated at ${maxOutputBytes} bytes]`;
+}
+
+function buildCommandResult(input: {
+  command: string;
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+  durationMs: number;
+  maxOutputBytes?: number;
+}): CommandResult {
+  const maxOutputBytes = input.maxOutputBytes ?? defaultMaxOutputBytes;
+  const stdout = sanitizeOutput(input.stdout, maxOutputBytes);
+  const stderr = sanitizeOutput(input.stderr, maxOutputBytes);
+
+  return {
+    command: input.command,
+    exitCode: input.exitCode,
+    stdout,
+    stderr,
+    timedOut: input.timedOut,
+    durationMs: input.durationMs,
+    truncated:
+      stdout.includes("[output truncated at") ||
+      stderr.includes("[output truncated at")
+  };
+}
+
+function buildErrorStderr(error: ExecaError, timeoutMs: number): string {
+  if (error.timedOut) {
+    const details = String(error.stderr ?? error.stdout ?? "").trim();
+    return details
+      ? `Command timed out after ${timeoutMs} ms.\n${details}`
+      : `Command timed out after ${timeoutMs} ms.`;
+  }
+
+  return String(error.stderr ?? error.message ?? error);
 }

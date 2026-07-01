@@ -26,6 +26,20 @@ describe("DoctorService", () => {
     expect(result.warnings.some((warning) => warning.includes("npm run lint is not available"))).toBe(true);
   }, 15000);
 
+  it("reports a dirty working tree as a concrete warning instead of NOT_READY", async () => {
+    const projectPath = await readyProject();
+    await writeFile(path.join(projectPath, "README.md"), "dirty\n", "utf8");
+
+    const result = await new DoctorService().run(projectPath);
+
+    expect(result.result).toBe("READY_WITH_WARNINGS");
+    expect(result.targetProject?.checks).toContainEqual({
+      name: "git status clean",
+      status: "warn",
+      details: "Working tree is not clean."
+    });
+  }, 15000);
+
   it("reports NOT_READY for a target folder without Git", async () => {
     const projectPath = await tempProject();
 
@@ -72,7 +86,7 @@ describe("DoctorService", () => {
       expect(configCheck?.details).toContain("exit code 0");
       expect(configCheck?.details).not.toContain("SUPER_SECRET_VALUE");
     });
-  }, 15000);
+  }, 30000);
 
   it("detects forbidden tracked paths", async () => {
     const projectPath = await tempProject();

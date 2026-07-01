@@ -1,9 +1,9 @@
-import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { TaskStore } from "./taskStore.js";
 import { ProjectPolicyService } from "./projectPolicy.js";
 import { ReviewGateService, type ReviewGateDecision } from "./reviewGate.js";
+import { readUtf8File, stripUtf8Bom } from "../utils/fileIO.js";
 import { safeExec } from "../utils/safeExec.js";
 import { ensureRelativeInsideProject } from "../utils/paths.js";
 
@@ -131,7 +131,7 @@ export class ApprovalService {
     }
 
     const absoluteReportPath = ensureRelativeInsideProject(projectPath, provenance.reviewReportPath);
-    const reportContent = await readFile(absoluteReportPath, "utf8").catch(() => undefined);
+    const reportContent = await readUtf8File(absoluteReportPath).catch(() => undefined);
     if (!reportContent) {
       return {
         decision: "BLOCKED",
@@ -221,11 +221,11 @@ export class ApprovalService {
 }
 
 function isReviewReportForTask(markdown: string, taskId: string): boolean {
-  return new RegExp(`^# Review Gate for Task ${escapeRegExp(taskId)}\\b`, "m").test(markdown);
+  return new RegExp(`^# Review Gate for Task ${escapeRegExp(taskId)}\\b`, "m").test(stripUtf8Bom(markdown));
 }
 
 function readDecisionFromReviewReport(markdown: string): ReviewGateDecision | undefined {
-  const match = markdown.match(/^## Decision\s+([A-Z_]+)\s*$/m);
+  const match = stripUtf8Bom(markdown).match(/^## Decision\s+([A-Z_]+)\s*$/m);
   if (!match) {
     return undefined;
   }

@@ -37,4 +37,23 @@ describe("dashboardConfig", () => {
     expect(loaded.config.managedProjects).toHaveLength(1);
     expect(loaded.localConfigExists).toBe(true);
   });
+
+  it("preserves nested worker.directExecution defaults when a local override changes one field", async () => {
+    const root = path.join(os.tmpdir(), `dashboard-config-${crypto.randomUUID()}`);
+    await mkdir(path.join(root, "scripts"), { recursive: true });
+    await writeFile(path.join(root, "scripts", "fmax-orchestrator.config.local.json"), JSON.stringify({
+      worker: {
+        directExecution: {
+          enabled: true
+        }
+      }
+    }), "utf8");
+
+    const loaded = await loadDashboardConfig(root);
+
+    expect(loaded.config.worker.directExecution.enabled).toBe(true);
+    expect(loaded.config.worker.directExecution.command).toBe("codex");
+    expect(loaded.config.worker.directExecution.sandbox).toBe("read-only");
+    expect(loaded.config.worker.directExecution.timeoutMs).toBe(1_200_000);
+  });
 });

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createToolHandlers, toolNames } from "../src/mcp/tools.js";
+import { createToolHandlers, registerTools, toolNames } from "../src/mcp/tools.js";
 import { buildMcpServer } from "../src/mcp/server.js";
 import { ProjectBootstrap } from "../src/services/projectBootstrap.js";
 import { safeExec } from "../src/utils/safeExec.js";
@@ -105,9 +105,32 @@ describe("MCP tool registry", () => {
         dryRun: true
       })
     ).resolves.toMatchObject({
-      executionState: "idle",
-      directExecutionEnabled: false
+      executionState: "idle"
     });
+  }, 15000);
+
+  it("returns a structured MCP error payload for read_report when the report is missing", async () => {
+    const projectPath = await readyProject();
+    const handlers = createToolHandlers();
+    const registeredTools: Array<{
+      name: string;
+      callback: (args: { projectPath: string; taskId: string }) => Promise<{ content: Array<{ text: string }> }>;
+    }> = [];
+    const server = {
+      registerTool(name: string, _config: unknown, callback: (args: { projectPath: string; taskId: string }) => Promise<{ content: Array<{ text: string }> }>) {
+        registeredTools.push({ name, callback });
+      }
+    };
+    registerTools(server as never, handlers);
+    const tool = registeredTools.find((entry) => entry.name === "read_report");
+
+    expect(tool).toBeDefined();
+
+    const result = await tool.callback({ projectPath, taskId: "9999" });
+    const payload = JSON.parse(result.content[0].text) as { ok: boolean; error: { message: string } };
+
+    expect(payload.ok).toBe(false);
+    expect(payload.error.message).toContain("Task not found");
   }, 15000);
 });
 

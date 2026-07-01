@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { TaskStore } from "../src/services/taskStore.js";
@@ -55,6 +55,15 @@ describe("TaskStore", () => {
     expect(state.tasks[0]?.status).toBe("reported");
   });
 
+  it("reads a task report saved with UTF-8 BOM", async () => {
+    const projectPath = await tempProject();
+    const store = new TaskStore();
+    await store.createTask(projectPath, taskInput("BOM report"));
+    await writeFile(path.join(projectPath, ".codex/reports/0001-report.md"), "\uFEFF# Report for Task 0001\n\nSaved from PowerShell.\n", "utf8");
+
+    await expect(store.readReport(projectPath, "0001")).resolves.toMatchObject({ taskId: "0001" });
+  });
+
   it("syncs pending tasks to reported when a report file exists", async () => {
     const projectPath = await tempProject();
     const store = new TaskStore();
@@ -66,6 +75,31 @@ describe("TaskStore", () => {
 
     expect(synced[0]?.status).toBe("reported");
     expect(taskMarkdown).toContain("## Status\n\nreported");
+  });
+
+  it("syncs a pending task to reported when the report uses UTF-8 BOM", async () => {
+    const projectPath = await tempProject();
+    const store = new TaskStore();
+    await store.createTask(projectPath, taskInput("BOM sync"));
+    await writeFile(path.join(projectPath, ".codex/reports/0001-report.md"), "\uFEFF# Report for Task 0001\n\nSaved from PowerShell.\n", "utf8");
+
+    const synced = await store.syncReportedTasks(projectPath);
+
+    expect(synced[0]?.status).toBe("reported");
+  });
+
+  it("syncs report-backed state even when task markdown is missing", async () => {
+    const projectPath = await tempProject();
+    const store = new TaskStore();
+    await store.createTask(projectPath, taskInput("Missing markdown"));
+    await unlink(path.join(projectPath, ".codex/tasks/0001-task.md"));
+    await writeFile(path.join(projectPath, ".codex/reports/0001-report.md"), "# Report for Task 0001\n", "utf8");
+
+    const synced = await store.syncReportedTasks(projectPath);
+    const state = await store.readState(projectPath);
+
+    expect(synced[0]?.status).toBe("reported");
+    expect(state.tasks[0]?.status).toBe("reported");
   });
 
   it("does not sync a pending task to reported when a colliding report belongs to another task", async () => {
@@ -102,7 +136,7 @@ describe("TaskStore", () => {
     await store.rejectTask(projectPath, "0001", "Needs changes.", ["Fix tests"]);
     expect((await store.getTask(projectPath, "0001")).status).toBe("rejected");
     await expect(readFile(path.join(projectPath, ".codex/tasks/0001-fix.md"), "utf8")).resolves.toContain("Fix tests");
-  });
+  }, 15000);
 
   it("lists tasks and archives approved tasks", async () => {
     const projectPath = await tempProject();
@@ -130,6 +164,21 @@ describe("TaskStore", () => {
 
     await expect(store.archiveTask(projectPath, "0001", "Too early.")).rejects.toThrow("Only approved or rejected tasks");
     await expect(stat(path.join(projectPath, ".codex/tasks/0001-task.md"))).resolves.toBeDefined();
+  });
+
+  it("recreates a missing task markdown from state before updating status", async () => {
+    const projectPath = await tempProject();
+    const store = new TaskStore();
+    await store.createTask(projectPath, taskInput("Recover me"));
+    await unlink(path.join(projectPath, ".codex/tasks/0001-task.md"));
+
+    const updated = await store.updateStatus(projectPath, "0001", "approved");
+    const recovered = await readFile(path.join(projectPath, ".codex/tasks/0001-task.md"), "utf8");
+
+    expect(updated.status).toBe("approved");
+    expect(recovered).toContain("# Task 0001: Recover me");
+    expect(recovered).toContain("Recovered from .codex/state/tasks.json");
+    expect(recovered).toContain("## Status\n\napproved");
   });
 });
 

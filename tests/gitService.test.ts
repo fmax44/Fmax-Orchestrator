@@ -27,6 +27,15 @@ describe("GitService", () => {
     });
     await expect(new TestRunner().run(projectPath, ["rm -rf ."])).rejects.toThrow("blocked by denylist");
   });
+
+  it("truncates oversized command output", async () => {
+    const projectPath = await tempProject();
+
+    const result = await safeExec(projectPath, "node -e \"console.log('x'.repeat(5000))\"", { maxOutputBytes: 200 });
+
+    expect(result.truncated).toBe(true);
+    expect(result.stdout).toContain("[output truncated at 200 bytes]");
+  });
 });
 
 async function tempProject(): Promise<string> {

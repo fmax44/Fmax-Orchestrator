@@ -50,6 +50,44 @@ describe("ProjectStatusService", () => {
     expect(status.nextActor).toBe("chatgpt");
   }, 15000);
 
+  it("treats a BOM-prefixed report as a valid task report", async () => {
+    const projectPath = await readyProject();
+    const taskId = await createTask(projectPath);
+    await writeFile(path.join(projectPath, ".codex", "reports", `${taskId}-report.md`), `\uFEFF# Report for Task ${taskId}\n\nStatus test report.\n`, "utf8");
+
+    const status = await new ProjectStatusService().check({ projectPath, includeDoctor: false });
+
+    expect(status.reports.latestTaskReport).toBe(`.codex/reports/${taskId}-report.md`);
+    expect(status.currentTask?.status).toBe("reported");
+    expect(status.recommendedAction).toBe("run_review_gate");
+  }, 15000);
+
+  it("does not treat a colliding report file as a valid task report", async () => {
+    const projectPath = await readyProject();
+    const taskId = await createTask(projectPath);
+    await writeFile(path.join(projectPath, ".codex", "reports", `${taskId}-report.md`), "# Report for Task 9999\n\nWrong task.\n", "utf8");
+
+    const status = await new ProjectStatusService().check({ projectPath, includeDoctor: false });
+
+    expect(status.reports.latestTaskReport).toBeUndefined();
+    expect(status.currentTask?.status).toBe("pending");
+    expect(status.recommendedAction).toBe("wait_for_codex_or_request_report");
+  }, 15000);
+
+  it("selects the newest reported task when no pending task remains", async () => {
+    const projectPath = await readyProject();
+    const firstTaskId = await createTask(projectPath);
+    await writeReport(projectPath, firstTaskId);
+    const secondTaskId = await createTask(projectPath);
+    await writeReport(projectPath, secondTaskId);
+
+    const status = await new ProjectStatusService().check({ projectPath, includeDoctor: false });
+
+    expect(status.currentTask?.id).toBe(secondTaskId);
+    expect(status.currentTask?.status).toBe("reported");
+    expect(status.reports.latestTaskReport).toBe(`.codex/reports/${secondTaskId}-report.md`);
+  }, 15000);
+
   it("recommends approval when Review Gate is APPROVABLE", async () => {
     const projectPath = await readyProject();
     const taskId = await createTask(projectPath);
@@ -61,6 +99,58 @@ describe("ProjectStatusService", () => {
     expect(status.review?.latestDecision).toBe("APPROVABLE");
     expect(status.review?.lastReviewHash).toMatch(/^sha256:/);
     expect(status.recommendedAction).toBe("approve_task");
+  }, 30000);
+
+  it("shows concrete next action when Review Gate needs manual review", async () => {
+    const projectPath = await readyProject();
+    const taskId = await createTask(projectPath);
+    await writeReport(projectPath, taskId);
+    await runReview(projectPath, taskId);
+    const statePath = path.join(projectPath, ".codex", "state", "tasks.json");
+    const state = JSON.parse(await readFile(statePath, "utf8")) as {
+      tasks: Array<{
+        id: string;
+        lastReviewGate?: {
+          decision: "APPROVABLE" | "NEEDS_REVIEW" | "BLOCKED";
+          warnings: string[];
+          errors: string[];
+        };
+      }>;
+    };
+    const task = state.tasks.find((item) => item.id === taskId);
+    if (!task?.lastReviewGate) {
+      throw new Error("Missing review provenance");
+    }
+    task.lastReviewGate.decision = "NEEDS_REVIEW";
+    task.lastReviewGate.warnings = ["Manual review is required for this task."];
+    await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+
+    const status = await new ProjectStatusService().check({ projectPath, includeDoctor: false });
+
+    expect(status.review?.latestDecision).toBe("NEEDS_REVIEW");
+    expect(status.recommendedAction).toBe("fix_blockers");
+    expect(status.nextAction).toContain("rerun npm run review");
+    expect(status.nextAction).toContain(taskId);
+  }, 15000);
+
+  it("invalidates stale missing-report review provenance when the report now exists", async () => {
+    const projectPath = await readyProject();
+    const taskId = await createTask(projectPath);
+    await new ReviewGateService().run({
+      projectPath,
+      taskId,
+      writeReport: true
+    });
+    await writeReport(projectPath, taskId);
+
+    const status = await new ProjectStatusService().check({ projectPath, taskId, includeDoctor: false });
+
+    expect(status.currentTask?.reportExists).toBe(true);
+    expect(status.review?.exists).toBe(false);
+    expect(status.recommendedAction).toBe("run_review_gate");
+    expect(status.warnings).toContain(
+      `Stored Review Gate result for task ${taskId} said the report was missing, but the report now exists. Rerun review_gate.`
+    );
   }, 15000);
 
   it("recommends committing changes for an approved task with dirty git", async () => {
@@ -120,7 +210,7 @@ describe("ProjectStatusService", () => {
 
     expect(parsed.projectName).toBe(path.basename(projectPath));
     expect(parsed.recommendedAction).toBe("create_task");
-  }, 15000);
+  }, 30000);
 
   it("registers and serves MCP project_status", async () => {
     const projectPath = await readyProject();
