@@ -1,5 +1,20 @@
 # Fmax-Orchestrator Desktop Dashboard Runbook
 
+## Dashboard button and Worker diagnostics note
+
+- Disabled dashboard actions show the missing config reason in the UI.
+- Direct POST requests for missing or disabled actions now return a clear `400` instead of a generic `500`.
+- Configured command actions are launched through the Windows-safe detached spawn path for `.cmd`, `.bat`, and `.ps1` commands.
+- Dashboard action buttons expose `state` / `statusText` in `/api/status`.
+- Button colors are: blue for idle or starting, green for confirmed running, red for failed, gray for disabled.
+- Launch-only actions such as ChatGPT, Codex, VPN, and config open stay idle after launch unless a real health or process signal exists.
+- Tunnel is running only when both `healthz` and `readyz` respond; `healthz` without `readyz` is shown as starting.
+- MCP is running only when an explicit MCP health URL responds successfully; stdio-only MCP remains idle/manual instead of fake running.
+- Codex Worker is running only from worker status states that indicate active work, and failed when the worker status is `error`.
+- The Codex Worker card shows compact state, report/task status, CLI availability, sandbox, last exit code, and a short `Last error summary`.
+- Raw Codex stdout/stderr and full session logs are not rendered in the main dashboard card. Use the worker status file or report for full diagnostics.
+- Long card values are wrapped and clamped so stale metadata cannot stretch the dashboard layout.
+
 ## Что это
 
 `Fmax-Orchestrator` можно использовать как локальный desktop launcher и status board:

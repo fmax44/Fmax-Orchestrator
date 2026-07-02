@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DashboardService, renderDashboardHtml } from "../src/services/dashboard.js";
+import { DashboardService, buildDashboardActions, renderDashboardHtml } from "../src/services/dashboard.js";
 import { createDefaultDashboardConfig } from "../src/services/dashboardConfig.js";
 
 describe("DashboardService", () => {
@@ -56,7 +56,7 @@ describe("DashboardService", () => {
     expect(snapshot.components.codexWorker.meta).toContain("Codex CLI: не найден");
   });
 
-  it("renders public IP, city, country, UTF-8 Russian text, and Codex Worker status", async () => {
+  it("renders UTF-8 Russian text and exposes running state for active worker", async () => {
     const service = new DashboardService({
       fetchImpl: async (input) => {
         const url = String(input);
@@ -147,19 +147,10 @@ describe("DashboardService", () => {
     });
 
     expect(snapshot.components.tunnel.state).toBe("online");
-    expect(snapshot.components.codexWorker.state).toBe("degraded");
-    expect(snapshot.ips.publicIp).toBe("1.2.3.4");
-    expect(snapshot.ips.city).toBe("Moscow");
-    expect(snapshot.ips.country).toBe("Russia");
-    expect(snapshot.actions.map((item) => item.id)).toEqual([
-      "open-vpn",
-      "start-tunnel",
-      "start-mcp",
-      "open-chatgpt",
-      "open-codex",
-      "open-config",
-      "start-codex-worker"
-    ]);
+    expect(snapshot.actions.find((item) => item.id === "start-codex-worker")).toMatchObject({
+      state: "running",
+      statusText: "работает"
+    });
 
     const html = renderDashboardHtml(snapshot, config, {
       flash: {
@@ -167,13 +158,161 @@ describe("DashboardService", () => {
         text: "Действие \"start-mcp\" не удалось запустить: example error"
       }
     });
+
     expect(html).toContain("Открыть VPN");
     expect(html).toContain("Город: Moscow");
     expect(html).toContain("Страна: Russia");
     expect(html).toContain("Codex Worker");
     expect(html).toContain("Последняя найденная задача");
-    expect(html).toContain("Codex CLI");
-    expect(html).toContain("workspace-write");
+    expect(html).toContain("Workspace-write".toLowerCase());
+    expect(html).toContain("работает");
     expect(html).toContain("Действие &quot;start-mcp&quot; не удалось запустить: example error");
+  });
+
+  it("does not render a huge raw Codex Worker last error in the dashboard card", async () => {
+    const rawSessionLog = [
+      "UNIQUE_RAW_CODEX_SESSION_LOG_START",
+      "OpenAI Codex session prompt/stdout/stderr",
+      "x".repeat(2_000),
+      "UNIQUE_RAW_CODEX_SESSION_LOG_END"
+    ].join("\n");
+    const service = new DashboardService({
+      fetchImpl: async () => ({ ok: false, json: async () => ({}) }) as Response,
+      projectStatusService: {
+        check: async ({ projectPath }) => ({
+          projectPath,
+          projectName: "demo",
+          git: { isRepo: true, status: "clean", changedFiles: [] },
+          policy: { exists: true, strictReviewGate: true },
+          doctor: { result: "READY", warnings: [] },
+          tasks: { total: 0, pending: 0, reported: 0, approved: 0, rejected: 0, archived: 0 },
+          reports: {},
+          recommendedAction: "create_task",
+          waitingFor: "chatgpt",
+          nextActor: "chatgpt",
+          nextAction: "Create task",
+          warnings: [],
+          errors: []
+        })
+      },
+      codexWorkerService: {
+        readStatus: async () => ({
+          state: "error",
+          updatedAt: "2026-06-30T07:00:00.000Z",
+          pollIntervalMs: 5000,
+          message: "Codex execution failed.",
+          lastReportStatus: "missing",
+          directCodexLaunchSupported: false,
+          limitations: [],
+          codexCli: {
+            command: "codex",
+            found: true,
+            execAvailable: true,
+            directExecutionEnabled: true,
+            sandbox: "workspace-write",
+            lastExitCode: 1,
+            lastError: rawSessionLog
+          },
+          host: "test-host",
+          pid: 1234
+        }),
+        inspectEnvironment: async () => ({
+          command: "codex",
+          found: true,
+          execAvailable: true,
+          directExecutionEnabled: true,
+          sandbox: "workspace-write"
+        })
+      }
+    });
+    const config = createDefaultDashboardConfig("D:/projects/chatgpt-codex-mcp");
+
+    const snapshot = await service.collect({
+      orchestratorRoot: "D:/projects/chatgpt-codex-mcp",
+      configPath: "D:/projects/chatgpt-codex-mcp/scripts/fmax-orchestrator.config.local.json",
+      configExists: true,
+      config
+    });
+    const html = renderDashboardHtml(snapshot, config);
+
+    expect(html).toContain("Last error summary");
+    expect(html).toContain("Last exit code: 1");
+    expect(html).toContain("Captured Codex session log is available in the worker status file.");
+    expect(html).not.toContain("UNIQUE_RAW_CODEX_SESSION_LOG_START");
+    expect(html).not.toContain("UNIQUE_RAW_CODEX_SESSION_LOG_END");
+    expect(html).not.toContain("x".repeat(2_000));
+  });
+
+  it("builds idle, starting, running, failed, and disabled action states", () => {
+    const config = createDefaultDashboardConfig("D:/projects/chatgpt-codex-mcp");
+    config.commands.tunnel = undefined;
+
+    const actions = buildDashboardActions(config, {
+      mcpServer: { name: "MCP", state: "manual", details: "manual", actionState: "idle" },
+      tunnel: { name: "Tunnel", state: "offline", details: "offline", actionState: "idle" },
+      codexWorker: { name: "Codex Worker", state: "offline", details: "worker failed", actionState: "failed" }
+    }, {
+      "start-mcp": {
+        state: "starting",
+        message: "Команда запущена, ожидаем подтверждение статуса.",
+        updatedAt: new Date().toISOString()
+      }
+    });
+
+    expect(actions.find((item) => item.id === "start-tunnel")).toMatchObject({
+      state: "disabled",
+      statusText: "не настроено"
+    });
+    expect(actions.find((item) => item.id === "start-mcp")).toMatchObject({
+      state: "starting",
+      statusText: "запуск..."
+    });
+    expect(actions.find((item) => item.id === "start-codex-worker")).toMatchObject({
+      state: "failed",
+      statusText: "ошибка"
+    });
+    expect(actions.find((item) => item.id === "open-chatgpt")).toMatchObject({
+      state: "idle",
+      statusText: "не запущено"
+    });
+  });
+  it("renders visual action state classes on dashboard buttons", () => {
+    const config = createDefaultDashboardConfig("D:/projects/chatgpt-codex-mcp");
+    config.apps.vpnPath = "C:/VPN/VPN.exe";
+    config.apps.codexPath = "C:/Codex/Codex.exe";
+    config.commands.tunnel = { label: "Start tunnel", command: "tunnel.cmd" };
+    config.health.mcpHealthUrl = "http://127.0.0.1:47821/healthz";
+
+    const actions = buildDashboardActions(config, {
+      mcpServer: { name: "MCP", state: "offline", details: "health failed", actionState: "failed" },
+      tunnel: { name: "Tunnel", state: "degraded", details: "readyz not ready", actionState: "starting" },
+      codexWorker: { name: "Codex Worker", state: "degraded", details: "waiting", actionState: "running" }
+    });
+
+    const html = renderDashboardHtml({
+      generatedAt: "2026-07-02T00:00:00.000Z",
+      orchestratorRoot: "D:/projects/chatgpt-codex-mcp",
+      configPath: "D:/projects/chatgpt-codex-mcp/scripts/fmax-orchestrator.config.local.json",
+      configExists: true,
+      components: {
+        mcpServer: { name: "MCP", state: "offline", details: "health failed" },
+        tunnel: { name: "Tunnel", state: "degraded", details: "readyz not ready" },
+        codexWorker: { name: "Codex Worker", state: "degraded", details: "waiting" }
+      },
+      ips: {
+        local: ["127.0.0.1"],
+        publicIpStatus: "unavailable",
+        publicIpDetails: "unavailable",
+        geoStatus: "unavailable",
+        geoDetails: "unavailable"
+      },
+      projects: [],
+      actions
+    }, config);
+
+    expect(html).toContain("action-button idle");
+    expect(html).toContain("action-button starting");
+    expect(html).toContain("action-button running");
+    expect(html).toContain("action-button failed");
   });
 });

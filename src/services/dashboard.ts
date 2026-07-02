@@ -5,6 +5,15 @@ import { CodexWorkerService, type CodexWorkerStatus } from "./codexWorker.js";
 import type { DashboardCommandConfig, DashboardConfig } from "./dashboardConfig.js";
 
 export type DashboardComponentState = "online" | "degraded" | "offline" | "manual";
+export type DashboardActionVisualState = "idle" | "starting" | "running" | "failed" | "disabled";
+
+export interface DashboardActionRuntimeState {
+  state: "idle" | "starting" | "failed";
+  message?: string;
+  updatedAt?: string;
+}
+
+export type DashboardActionRuntimeMap = Partial<Record<DashboardActionId, DashboardActionRuntimeState>>;
 
 export interface DashboardComponentStatus {
   name: string;
@@ -12,6 +21,7 @@ export interface DashboardComponentStatus {
   details: string;
   actionLabel?: string;
   meta?: string[];
+  actionState?: DashboardActionVisualState;
 }
 
 export interface DashboardProjectCard {
@@ -57,9 +67,14 @@ export interface DashboardSnapshot {
     id: DashboardActionId;
     label: string;
     enabled: boolean;
+    state: DashboardActionVisualState;
+    statusText: string;
     reason?: string;
+    details?: string;
   }>;
 }
+
+export type DashboardActionState = DashboardSnapshot["actions"][number];
 
 export interface DashboardRenderOptions {
   flash?: {
@@ -82,6 +97,7 @@ export interface DashboardCollectOptions {
   configPath: string;
   configExists: boolean;
   config: DashboardConfig;
+  actionRuntime?: DashboardActionRuntimeMap;
 }
 
 export interface DashboardDependencies {
@@ -110,6 +126,11 @@ const RU = {
   unavailable: "\u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d",
   managedProjects: "\u0423\u043f\u0440\u0430\u0432\u043b\u044f\u0435\u043c\u044b\u0435 \u043f\u0440\u043e\u0435\u043a\u0442\u044b",
   actionAvailable: "\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e\u0435 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435",
+  actionIdle: "\u043d\u0435 \u0437\u0430\u043f\u0443\u0449\u0435\u043d\u043e",
+  actionStarting: "\u0437\u0430\u043f\u0443\u0441\u043a...",
+  actionRunning: "\u0440\u0430\u0431\u043e\u0442\u0430\u0435\u0442",
+  actionFailed: "\u043e\u0448\u0438\u0431\u043a\u0430",
+  actionDisabled: "\u043d\u0435 \u043d\u0430\u0441\u0442\u0440\u043e\u0435\u043d\u043e",
   projectReady: "\u0413\u041e\u0422\u041e\u0412 \u041a \u041f\u0420\u041e\u0412\u0415\u0420\u041a\u0415",
   projectFailed: "\u041f\u0420\u041e\u0412\u0415\u0420\u041a\u0410 \u041d\u0415 \u041f\u0420\u041e\u0428\u041b\u0410",
   currentTask: "\u0422\u0435\u043a\u0443\u0449\u0430\u044f \u0437\u0430\u0434\u0430\u0447\u0430",
@@ -139,9 +160,14 @@ const RU = {
   workerExecAvailable: "codex exec",
   workerDirectExecution: "\u041f\u0440\u044f\u043c\u043e\u0435 \u0432\u044b\u043f\u043e\u043b\u043d\u0435\u043d\u0438\u0435",
   workerLastExitCode: "Last exit code",
-  workerLastError: "Last error",
+  workerLastErrorSummary: "Last error summary",
+  workerStatusFile: "Worker status file",
+  workerFullDiagnostics: "\u041f\u043e\u043b\u043d\u044b\u0439 stdout/stderr \u043e\u0441\u0442\u0430\u0451\u0442\u0441\u044f \u0442\u043e\u043b\u044c\u043a\u043e \u0432 worker status file/report.",
   workerSandbox: "Sandbox"
 } as const;
+
+const WORKER_DIAGNOSTIC_SUMMARY_LIMIT = 240;
+const ACTION_START_GRACE_MS = 15_000;
 
 export class DashboardService {
   private readonly fetchImpl: typeof fetch;
@@ -175,7 +201,11 @@ export class DashboardService {
       },
       ips,
       projects,
-      actions: buildActions(options.config)
+      actions: buildDashboardActions(options.config, {
+        mcpServer,
+        tunnel,
+        codexWorker
+      }, options.actionRuntime)
     };
   }
 
@@ -314,7 +344,8 @@ export class DashboardService {
         details: config.commands.mcpServer
           ? "\u041a\u043e\u043c\u0430\u043d\u0434\u0430 \u0437\u0430\u043f\u0443\u0441\u043a\u0430 \u043d\u0430\u0441\u0442\u0440\u043e\u0435\u043d\u0430. \u0414\u043b\u044f stdio MCP-\u0441\u0435\u0440\u0432\u0435\u0440\u0430 \u043d\u0435 \u0437\u0430\u0434\u0430\u043d \u043e\u0442\u0434\u0435\u043b\u044c\u043d\u044b\u0439 HTTP health-check."
           : "\u041d\u0435 \u043d\u0430\u0441\u0442\u0440\u043e\u0435\u043d\u044b \u043d\u0438 \u043a\u043e\u043c\u0430\u043d\u0434\u0430 \u0437\u0430\u043f\u0443\u0441\u043a\u0430 MCP, \u043d\u0438 health-check.",
-        actionLabel: RU.startMcp
+        actionLabel: RU.startMcp,
+        actionState: config.commands.mcpServer ? "idle" : "disabled"
       };
     }
 
@@ -325,7 +356,8 @@ export class DashboardService {
       details: probe.ok
         ? `\u0421\u0435\u0440\u0432\u0438\u0441 \u043e\u0442\u0432\u0435\u0447\u0430\u0435\u0442 \u043f\u043e ${config.health.mcpHealthUrl}`
         : `\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430 health \u043d\u0435 \u043f\u0440\u043e\u0448\u043b\u0430 \u043f\u043e ${config.health.mcpHealthUrl}`,
-      actionLabel: RU.startMcp
+      actionLabel: RU.startMcp,
+      actionState: probe.ok ? "running" : "failed"
     };
   }
 
@@ -340,7 +372,8 @@ export class DashboardService {
         name: "Tunnel",
         state: "online",
         details: `Tunnel \u043e\u0442\u0432\u0435\u0447\u0430\u0435\u0442 \u0438 \u0433\u043e\u0442\u043e\u0432 \u043f\u043e ${config.health.tunnelHealthUrl} / ${config.health.tunnelReadyUrl}`,
-        actionLabel: RU.startTunnel
+        actionLabel: RU.startTunnel,
+        actionState: "running"
       };
     }
 
@@ -349,7 +382,8 @@ export class DashboardService {
         name: "Tunnel",
         state: "degraded",
         details: `healthz \u043e\u0442\u0432\u0435\u0447\u0430\u0435\u0442, \u043d\u043e readyz \u0435\u0449\u0451 \u043d\u0435 \u0433\u043e\u0442\u043e\u0432 \u043f\u043e ${config.health.tunnelReadyUrl}`,
-        actionLabel: RU.startTunnel
+        actionLabel: RU.startTunnel,
+        actionState: "starting"
       };
     }
 
@@ -359,7 +393,8 @@ export class DashboardService {
       details: config.commands.tunnel
         ? `\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430 tunnel \u043d\u0435 \u043f\u0440\u043e\u0448\u043b\u0430 \u043f\u043e ${config.health.tunnelHealthUrl}. \u0418\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u0439\u0442\u0435 \u043a\u043d\u043e\u043f\u043a\u0443 \u0437\u0430\u043f\u0443\u0441\u043a\u0430.`
         : `\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430 tunnel \u043d\u0435 \u043f\u0440\u043e\u0448\u043b\u0430 \u043f\u043e ${config.health.tunnelHealthUrl}. \u0414\u043e\u0431\u0430\u0432\u044c\u0442\u0435 \u043a\u043e\u043c\u0430\u043d\u0434\u0443 tunnel \u0432 local config \u0434\u043b\u044f \u0437\u0430\u043f\u0443\u0441\u043a\u0430 \u0432 \u043e\u0434\u0438\u043d \u043a\u043b\u0438\u043a.`,
-      actionLabel: RU.startTunnel
+      actionLabel: RU.startTunnel,
+      actionState: config.commands.tunnel ? "idle" : "disabled"
     };
   }
 
@@ -372,11 +407,12 @@ export class DashboardService {
         state: config.commands.codexWorker ? "manual" : "offline",
         details: RU.workerNotStarted,
         actionLabel: RU.startCodexWorker,
-        meta: [...buildWorkerMeta(runtime), `${RU.workerLimitations}: ${RU.workerDirectLaunch}`]
+        actionState: config.commands.codexWorker ? "idle" : "disabled",
+        meta: [...buildWorkerMeta(runtime, config.worker.statusFilePath), `${RU.workerLimitations}: ${RU.workerDirectLaunch}`]
       };
     }
 
-    return mapWorkerStatus(status);
+    return mapWorkerStatus(status, config.worker.statusFilePath);
   }
 }
 
@@ -463,20 +499,41 @@ export function renderDashboardHtml(snapshot: DashboardSnapshot, config: Dashboa
     .offline { background: #ffd9d9; color: var(--bad); }
     .manual { background: #ece7df; color: #4f4a44; }
     .action-form { margin: 0; }
-    button {
+    .action-button {
       width: 100%;
       border: 0;
-      border-radius: 16px;
-      padding: 13px 16px;
-      background: #1d3557;
+      border-radius: 8px;
+      padding: 11px 12px;
       color: white;
       font-size: 15px;
       font-weight: 700;
       cursor: pointer;
+      display: grid;
+      gap: 4px;
+      text-align: left;
+      min-height: 62px;
     }
-    button[disabled] {
-      background: #b7b7b7;
+    .action-button.idle {
+      background: #1d4ed8;
+    }
+    .action-button.starting {
+      background: #2563eb;
+    }
+    .action-button.running {
+      background: #15803d;
+    }
+    .action-button.failed {
+      background: #b91c1c;
+    }
+    .action-button.disabled {
+      background: #8f8f8f;
       cursor: not-allowed;
+    }
+    .action-state {
+      font-size: 12px;
+      font-weight: 700;
+      opacity: 0.9;
+      text-transform: uppercase;
     }
     code {
       font-family: "Cascadia Code", "Consolas", monospace;
@@ -484,6 +541,7 @@ export function renderDashboardHtml(snapshot: DashboardSnapshot, config: Dashboa
       background: rgba(34, 84, 61, 0.08);
       padding: 1px 6px;
       border-radius: 7px;
+      overflow-wrap: anywhere;
     }
     ul.meta {
       list-style: none;
@@ -493,6 +551,19 @@ export function renderDashboardHtml(snapshot: DashboardSnapshot, config: Dashboa
       gap: 8px;
     }
     .card h3 { margin-bottom: 10px; }
+    .card p, .card li, .muted {
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .card p, ul.meta li {
+      display: -webkit-box;
+      -webkit-line-clamp: 4;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    ul.meta li {
+      max-height: 5.8em;
+    }
     .project-grid .card { min-height: 260px; }
   </style>
 </head>
@@ -545,7 +616,11 @@ export function renderDashboardHtml(snapshot: DashboardSnapshot, config: Dashboa
 
 function renderActionButton(action: DashboardSnapshot["actions"][number]): string {
   return `<form class="action-form" method="POST" action="/action/${encodeURIComponent(action.id)}">
-    <button ${action.enabled ? "" : "disabled"} title="${escapeHtml(action.reason ?? "")}">${escapeHtml(action.label)}</button>
+    <button class="action-button ${escapeHtml(action.state)}" ${action.enabled ? "" : "disabled"} title="${escapeHtml(action.reason ?? action.details ?? action.statusText)}">
+      <span>${escapeHtml(action.label)}</span>
+      <span class="action-state">${escapeHtml(action.statusText)}</span>
+    </button>
+    ${action.details ? `<div class="muted">${escapeHtml(action.details)}</div>` : ""}
     ${!action.enabled && action.reason ? `<div class="muted">${escapeHtml(action.reason)}</div>` : ""}
   </form>`;
 }
@@ -555,7 +630,7 @@ function renderComponentCard(component: DashboardComponentStatus): string {
     <p class="pill ${component.state}">${escapeHtml(localizeComponentState(component.state))}</p>
     <h3>${escapeHtml(component.name)}</h3>
     <p>${escapeHtml(component.details)}</p>
-    ${component.meta?.length ? `<ul class="meta">${component.meta.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}
+    ${component.meta?.length ? `<ul class="meta">${component.meta.map((item) => `<li title="${escapeHtml(item)}">${escapeHtml(item)}</li>`).join("")}</ul>` : ""}
     ${component.actionLabel ? `<p class="muted">${RU.actionAvailable}: ${escapeHtml(component.actionLabel)}</p>` : ""}
   </article>`;
 }
@@ -580,49 +655,169 @@ function renderProjectCard(project: DashboardProjectCard): string {
   </article>`;
 }
 
-function buildActions(config: DashboardConfig): DashboardSnapshot["actions"] {
+export function buildDashboardActions(
+  config: DashboardConfig,
+  components?: DashboardSnapshot["components"],
+  runtime: DashboardActionRuntimeMap = {}
+): DashboardActionState[] {
+  const openVpnEnabled = Boolean(config.apps.vpnPath);
+  const startTunnelEnabled = Boolean(config.commands.tunnel);
+  const startMcpEnabled = Boolean(config.commands.mcpServer);
+  const openCodexEnabled = Boolean(config.apps.codexPath);
+  const startWorkerEnabled = Boolean(config.commands.codexWorker);
+  const openChatgptEnabled = Boolean(config.apps.chatgptUrl);
+
+  const openVpnState = buildLaunchActionState(openVpnEnabled, runtime["open-vpn"]);
+  const tunnelState = buildServiceActionState(startTunnelEnabled, components?.tunnel.actionState, runtime["start-tunnel"], components?.tunnel.details);
+  const mcpState = buildMcpActionState(startMcpEnabled, Boolean(config.health.mcpHealthUrl), components?.mcpServer.actionState, runtime["start-mcp"], components?.mcpServer.details);
+  const openChatgptState = buildLaunchActionState(openChatgptEnabled, runtime["open-chatgpt"]);
+  const openCodexState = buildLaunchActionState(openCodexEnabled, runtime["open-codex"]);
+  const openConfigState = buildLaunchActionState(true, runtime["open-config"]);
+  const workerState = buildWorkerActionState(startWorkerEnabled, components?.codexWorker.actionState, runtime["start-codex-worker"], components?.codexWorker.details);
+
   return [
     {
       id: "open-vpn",
       label: RU.openVpn,
-      enabled: Boolean(config.apps.vpnPath),
-      reason: "\u0423\u043a\u0430\u0436\u0438\u0442\u0435 apps.vpnPath \u0432 scripts/fmax-orchestrator.config.local.json"
+      enabled: openVpnEnabled,
+      ...openVpnState,
+      reason: openVpnEnabled ? undefined : "\u0423\u043a\u0430\u0436\u0438\u0442\u0435 apps.vpnPath \u0432 scripts/fmax-orchestrator.config.local.json"
     },
     {
       id: "start-tunnel",
       label: RU.startTunnel,
-      enabled: Boolean(config.commands.tunnel),
-      reason: "\u0423\u043a\u0430\u0436\u0438\u0442\u0435 commands.tunnel \u0432 local config"
+      enabled: startTunnelEnabled,
+      ...tunnelState,
+      reason: startTunnelEnabled ? undefined : "\u0423\u043a\u0430\u0436\u0438\u0442\u0435 commands.tunnel \u0432 local config"
     },
     {
       id: "start-mcp",
       label: RU.startMcp,
-      enabled: Boolean(config.commands.mcpServer),
-      reason: "\u0423\u043a\u0430\u0436\u0438\u0442\u0435 commands.mcpServer \u0432 local config"
+      enabled: startMcpEnabled,
+      ...mcpState,
+      reason: startMcpEnabled ? undefined : "\u0423\u043a\u0430\u0436\u0438\u0442\u0435 commands.mcpServer \u0432 local config"
     },
     {
       id: "open-chatgpt",
       label: RU.openChatgpt,
-      enabled: Boolean(config.apps.chatgptUrl)
+      enabled: openChatgptEnabled,
+      ...openChatgptState,
+      reason: openChatgptEnabled ? undefined : "\u0423\u043a\u0430\u0436\u0438\u0442\u0435 apps.chatgptUrl \u0432 local config"
     },
     {
       id: "open-codex",
       label: RU.openCodex,
-      enabled: Boolean(config.apps.codexPath),
-      reason: "\u0423\u043a\u0430\u0436\u0438\u0442\u0435 apps.codexPath \u0432 scripts/fmax-orchestrator.config.local.json"
+      enabled: openCodexEnabled,
+      ...openCodexState,
+      reason: openCodexEnabled ? undefined : "\u0423\u043a\u0430\u0436\u0438\u0442\u0435 apps.codexPath \u0432 scripts/fmax-orchestrator.config.local.json"
     },
     {
       id: "open-config",
       label: RU.openConfig,
-      enabled: true
+      enabled: true,
+      ...openConfigState
     },
     {
       id: "start-codex-worker",
       label: RU.startCodexWorker,
-      enabled: Boolean(config.commands.codexWorker),
-      reason: "\u0423\u043a\u0430\u0436\u0438\u0442\u0435 commands.codexWorker \u0432 local config"
+      enabled: startWorkerEnabled,
+      ...workerState,
+      reason: startWorkerEnabled ? undefined : "\u0423\u043a\u0430\u0436\u0438\u0442\u0435 commands.codexWorker \u0432 local config"
     }
   ];
+}
+
+function buildActionState(
+  enabled: boolean,
+  state: Exclude<DashboardActionVisualState, "disabled">,
+  details?: string
+): Pick<DashboardActionState, "state" | "statusText" | "details"> {
+  const resolvedState = enabled ? state : "disabled";
+  return {
+    state: resolvedState,
+    statusText: localizeActionState(resolvedState),
+    details
+  };
+}
+
+function buildLaunchActionState(
+  enabled: boolean,
+  runtime: DashboardActionRuntimeState | undefined
+): Pick<DashboardActionState, "state" | "statusText" | "details"> {
+  if (!enabled) {
+    return buildActionState(false, "idle");
+  }
+
+  if (runtime?.state === "failed") {
+    return buildActionState(true, "failed", runtime.message);
+  }
+
+  return buildActionState(true, "idle", runtime?.message);
+}
+
+function buildServiceActionState(
+  enabled: boolean,
+  componentState: DashboardActionVisualState | undefined,
+  runtime: DashboardActionRuntimeState | undefined,
+  componentDetails?: string
+): Pick<DashboardActionState, "state" | "statusText" | "details"> {
+  if (!enabled) {
+    return buildActionState(false, "idle");
+  }
+
+  if (componentState === "running") {
+    return buildActionState(true, "running", componentDetails);
+  }
+
+  if (componentState === "starting") {
+    return buildActionState(true, "starting", componentDetails);
+  }
+
+  if (runtime?.state === "starting" && isRuntimeFresh(runtime)) {
+    return buildActionState(true, "starting", runtime.message);
+  }
+
+  if (componentState === "failed" || runtime?.state === "failed" || (runtime?.state === "starting" && !isRuntimeFresh(runtime))) {
+    return buildActionState(true, "failed", runtime?.message ?? componentDetails);
+  }
+
+  return buildActionState(true, "idle");
+}
+
+function buildMcpActionState(
+  enabled: boolean,
+  hasReliableHealth: boolean,
+  componentState: DashboardActionVisualState | undefined,
+  runtime: DashboardActionRuntimeState | undefined,
+  componentDetails?: string
+): Pick<DashboardActionState, "state" | "statusText" | "details"> {
+  const base = buildServiceActionState(enabled, hasReliableHealth ? componentState : undefined, runtime, componentDetails);
+  if (base.state === "idle" && enabled && !hasReliableHealth) {
+    return {
+      ...base,
+      details: runtime?.message ?? "\u041d\u0435\u0442 \u0434\u043e\u0441\u0442\u043e\u0432\u0435\u0440\u043d\u043e\u0433\u043e health-check \u0434\u043b\u044f MCP."
+    };
+  }
+
+  return base;
+}
+
+function buildWorkerActionState(
+  enabled: boolean,
+  componentState: DashboardActionVisualState | undefined,
+  runtime: DashboardActionRuntimeState | undefined,
+  componentDetails?: string
+): Pick<DashboardActionState, "state" | "statusText" | "details"> {
+  return buildServiceActionState(enabled, componentState, runtime, componentDetails);
+}
+
+function isRuntimeFresh(runtime: DashboardActionRuntimeState): boolean {
+  if (!runtime.updatedAt) {
+    return false;
+  }
+
+  const updatedAt = Date.parse(runtime.updatedAt);
+  return Number.isFinite(updatedAt) && Date.now() - updatedAt <= ACTION_START_GRACE_MS;
 }
 
 function mapProjectStatus(name: string, status: ProjectStatusResult): DashboardProjectCard {
@@ -645,14 +840,14 @@ function mapProjectStatus(name: string, status: ProjectStatusResult): DashboardP
   };
 }
 
-function mapWorkerStatus(status: CodexWorkerStatus): DashboardComponentStatus {
+function mapWorkerStatus(status: CodexWorkerStatus, statusFilePath: string): DashboardComponentStatus {
   const state = workerStateToComponentState(status.state);
   const meta = [
     status.currentTask
       ? `${RU.workerTask}: ${status.currentTask.projectName} / ${status.currentTask.taskId} / ${status.currentTask.title}`
       : `${RU.workerTask}: \u043d\u0435\u0442`,
     `${RU.workerReport}: ${status.lastReportStatus === "detected" ? "\u043d\u0430\u0439\u0434\u0435\u043d" : "\u0435\u0449\u0451 \u043d\u0435\u0442"}`,
-    ...buildWorkerMeta(status.codexCli),
+    ...buildWorkerMeta(status.codexCli, statusFilePath),
     `${RU.workerLimitations}: ${RU.workerDirectLaunch}`
   ];
 
@@ -661,19 +856,82 @@ function mapWorkerStatus(status: CodexWorkerStatus): DashboardComponentStatus {
     state,
     details: `${status.message} (${status.updatedAt})`,
     actionLabel: RU.startCodexWorker,
+    actionState: workerStateToActionState(status.state),
     meta
   };
 }
 
-function buildWorkerMeta(status: CodexWorkerStatus["codexCli"]): string[] {
+function workerStateToActionState(state: CodexWorkerStatus["state"]): DashboardActionVisualState {
+  switch (state) {
+    case "idle":
+      return "idle";
+    case "task_found":
+    case "waiting_for_codex":
+    case "report_detected":
+      return "running";
+    case "error":
+      return "failed";
+  }
+}
+
+function buildWorkerMeta(status: CodexWorkerStatus["codexCli"], statusFilePath: string): string[] {
+  const lastErrorSummary = summarizeWorkerDiagnostic(status.lastError);
   return [
     `${RU.workerCliFound}: ${status.found ? "\u043d\u0430\u0439\u0434\u0435\u043d" : "\u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d"}`,
     `${RU.workerExecAvailable}: ${status.execAvailable ? "\u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d" : "\u043d\u0435 \u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d"}`,
     `${RU.workerDirectExecution}: ${status.directExecutionEnabled ? "\u0432\u043a\u043b\u044e\u0447\u0435\u043d\u043e" : "\u0432\u044b\u043a\u043b\u044e\u0447\u0435\u043d\u043e"}`,
     `${RU.workerSandbox}: ${status.sandbox}`,
     `${RU.workerLastExitCode}: ${status.lastExitCode ?? "\u043d\u0435\u0442"}`,
-    `${RU.workerLastError}: ${status.lastError ?? "\u043d\u0435\u0442"}`
+    `${RU.workerLastErrorSummary}: ${lastErrorSummary ?? "\u043d\u0435\u0442"}`,
+    `${RU.workerStatusFile}: ${statusFilePath}`,
+    ...(status.lastError ? [RU.workerFullDiagnostics] : [])
   ];
+}
+
+function summarizeWorkerDiagnostic(value: string | undefined): string | undefined {
+  const compact = value?.replace(/\s+/gu, " ").trim();
+  if (!compact) {
+    return undefined;
+  }
+
+  if (looksLikeRawCodexSessionLog(compact)) {
+    const nestedMessage = [
+      extractPattern(compact, /Access is denied\./iu),
+      extractPattern(compact, /Failed to start [^.]+/iu),
+      extractPattern(compact, /spawn EINVAL/iu),
+      extractPattern(compact, /PSSecurityException/iu),
+      extractPattern(compact, /sandbox[^.]+denied[^.]*/iu),
+      extractPattern(compact, /report was not detected[^.]*/iu)
+    ].find(Boolean);
+
+    if (nestedMessage) {
+      return trimDiagnosticSummary(nestedMessage);
+    }
+
+    return "Captured Codex session log is available in the worker status file.";
+  }
+
+  return trimDiagnosticSummary(compact);
+}
+
+function trimDiagnosticSummary(value: string): string {
+  return value.length > WORKER_DIAGNOSTIC_SUMMARY_LIMIT
+    ? `${value.slice(0, WORKER_DIAGNOSTIC_SUMMARY_LIMIT - 1)}...`
+    : value;
+}
+
+function looksLikeRawCodexSessionLog(value: string): boolean {
+  return value.includes("OpenAI Codex v")
+    || value.includes("OpenAI Codex session")
+    || value.includes("session id:")
+    || value.includes("workdir:")
+    || value.includes("approval:")
+    || value.includes("sandbox:")
+    || value.includes("user 1. Open task file");
+}
+
+function extractPattern(value: string, pattern: RegExp): string | undefined {
+  return value.match(pattern)?.[0];
 }
 
 function workerStateToComponentState(state: CodexWorkerStatus["state"]): DashboardComponentState {
@@ -697,6 +955,16 @@ function localizeComponentState(state: DashboardComponentState): string {
     offline: "\u041d\u0415 \u0412 \u0421\u0415\u0422\u0418",
     manual: "\u0420\u0423\u0427\u041d\u041e\u0419"
   } as Record<DashboardComponentState, string>)[state];
+}
+
+function localizeActionState(state: DashboardActionVisualState): string {
+  return ({
+    idle: RU.actionIdle,
+    starting: RU.actionStarting,
+    running: RU.actionRunning,
+    failed: RU.actionFailed,
+    disabled: RU.actionDisabled
+  } as Record<DashboardActionVisualState, string>)[state];
 }
 
 function localizeTaskStatus(status: string): string {

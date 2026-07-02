@@ -494,5 +494,9 @@ Notes:
 
 - On Windows the launcher now starts `.cmd`, `.bat`, and `.ps1` commands through a Windows-safe detached spawn path to avoid `spawn EINVAL` for dashboard actions such as `start-mcp`.
 - Russian dashboard HTML is served as UTF-8 (`charset=utf-8`) and covered by tests.
+- Dashboard action buttons expose state in `/api/status` and use visual colors: blue idle/starting, green running, red failed, gray disabled.
+- Launch-only actions such as ChatGPT, Codex, VPN, and config open stay idle after launch instead of showing false permanent running status.
+- The Codex Worker card renders only compact diagnostics; raw session logs stay in the worker status file/report.
+- Direct POST calls to disabled or unconfigured dashboard actions return a clear `400` instead of a generic `500`.
 
 See [docs/DESKTOP_DASHBOARD_RUNBOOK_RU.md](docs/DESKTOP_DASHBOARD_RUNBOOK_RU.md) for the Russian runbook.
