@@ -87,7 +87,7 @@ export class CodexAutonomousRunService {
         directExecutionEnabled: directExecution.enabled,
         directExecutionReason: directExecution.enabled
           ? "direct execution is enabled by worker config, but there is no pending task to run."
-          : "direct execution is disabled by worker config, and there is no pending task to run.",
+          : "direct execution is disabled for this run, and there is no pending task to run.",
         dryRun: Boolean(options.dryRun),
         message: "No pending task is available for an autonomous Codex run.",
         configSource: options.localConfigExists ? "local" : "default"
@@ -108,12 +108,11 @@ export class CodexAutonomousRunService {
         reportExists: Boolean(pending.result.task?.reportExists),
         executionState: "blocked",
         changedFilesSummary: await this.changedFilesSummary(pending.project.path),
-        nextRecommendedAction: "fix_blocker",
+        nextRecommendedAction: "manual_codex_run",
         directExecutionEnabled: false,
-        directExecutionReason: "worker.directExecution.enabled is false in the loaded dashboard config.",
+        directExecutionReason: "Direct execution is disabled for this run. Experimental codex exec requires worker.directExecution.enabled plus an explicit direct-execution request.",
         dryRun: Boolean(options.dryRun),
-        message: "Direct execution is disabled. Enable worker.directExecution.enabled before asking Codex to run the next pending task autonomously.",
-        plannedCommand,
+        message: `Manual Codex Desktop mode is active. Open Codex Desktop and execute ${pending.result.task?.taskPath ?? "the pending task"}, then create ${pending.result.task?.reportPath ?? "the task report"}. codex exec was not invoked.`,
         configSource: options.localConfigExists ? "local" : "default"
       };
     }

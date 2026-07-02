@@ -12,6 +12,8 @@ describe("dashboardConfig", () => {
     expect(config.managedProjects.length).toBeGreaterThanOrEqual(2);
     expect(config.commands.mcpServer?.label).toBe("Start MCP server");
     expect(config.publicIpGeoLookupUrlTemplate).toContain("{ip}");
+    expect(config.worker.directExecution.enabled).toBe(false);
+    expect(config.worker.directExecution.sandbox).toBe("read-only");
   });
 
   it("merges a local override config", async () => {

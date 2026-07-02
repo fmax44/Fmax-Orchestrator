@@ -8,6 +8,7 @@ const orchestratorRoot = process.cwd();
 try {
   const loaded = await loadDashboardConfig(orchestratorRoot);
   const service = new CodexAutonomousRunService();
+  const directExecutionEnabled = loaded.config.worker.directExecution.enabled && args.directExecution;
   const result = await service.run({
     projects: loaded.config.managedProjects,
     projectPath: args.project ? path.resolve(args.project) : undefined,
@@ -17,7 +18,11 @@ try {
     waitTimeoutMs: args.timeoutMs,
     dryRun: args.dryRun,
     localConfigExists: loaded.localConfigExists,
-    directExecution: loaded.config.worker.directExecution
+    directExecution: {
+      ...loaded.config.worker.directExecution,
+      enabled: directExecutionEnabled,
+      sandbox: directExecutionEnabled ? loaded.config.worker.directExecution.sandbox : "read-only"
+    }
   });
 
   if (args.format === "json") {
@@ -47,7 +52,7 @@ function formatAutonomousRunText(result: {
   configSource?: "local" | "default";
 }): string {
   return [
-    "Controlled Codex autonomous run:",
+    "Controlled Codex autonomous run (experimental; disabled by default):",
     `Execution state: ${result.executionState}`,
     `Direct execution enabled: ${result.directExecutionEnabled ? "yes" : "no"}`,
     `Direct execution reason: ${result.directExecutionReason}`,
@@ -73,13 +78,15 @@ function parseArgs(argv: string[]): {
   pollIntervalMs?: number;
   dryRun: boolean;
   format: "text" | "json";
+  directExecution: boolean;
 } {
   return {
     project: readValue(argv, "--project") ?? readValue(argv, "-p"),
     timeoutMs: readNumber(argv, "--timeout-ms"),
     pollIntervalMs: readNumber(argv, "--poll-interval-ms"),
     dryRun: argv.includes("--dry-run"),
-    format: readValue(argv, "--format") === "json" ? "json" : "text"
+    format: readValue(argv, "--format") === "json" ? "json" : "text",
+    directExecution: argv.includes("--direct-execution")
   };
 }
 

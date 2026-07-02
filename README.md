@@ -228,6 +228,21 @@ npm run codex:next -- --project "D:\projects\some-project"
 
 Задачи лежат в `.codex/tasks`, отчёты в `.codex/reports`, статусы в `.codex/state/tasks.json`, решения архитектора в `.codex/decisions`.
 
+## Manual Codex Desktop Mode
+
+Основной стабильный workflow остаётся ручным для Codex Desktop:
+
+1. ChatGPT/MCP создаёт задачу в `.codex/tasks`.
+2. Пользователь открывает Codex Desktop.
+3. Codex Desktop читает `.codex/tasks/<id>-task.md`.
+4. Codex Desktop делает изменения и пишет `.codex/reports/<id>-report.md`.
+5. ChatGPT/MCP запускает `review_gate`, затем `approve_task` или `reject_task`.
+6. Commit/push выполняются только отдельным осознанным шагом после проверки.
+
+Codex CLI direct execution не является основным сценарием. `npm run codex:run-once` и MCP `codex_autonomous_run` оставлены как экспериментальный opt-in: без явного `--direct-execution` или `allowDirectExecution=true` они не вызывают `codex exec`, быстро возвращают manual/blocked result и подсказывают открыть Codex Desktop.
+
+См. также [Manual Codex Desktop workflow](docs/MANUAL_CODEX_DESKTOP_WORKFLOW_RU.md).
+
 ## Tools
 
 - `create_task` создаёт новую задачу.
@@ -497,6 +512,8 @@ Notes:
 - Dashboard action buttons expose state in `/api/status` and use visual colors: blue idle/starting, green running, red failed, gray disabled.
 - Launch-only actions such as ChatGPT, Codex, VPN, and config open stay idle after launch instead of showing false permanent running status.
 - The Codex Worker card renders only compact diagnostics; raw session logs stay in the worker status file/report.
+- Codex Worker is optional/manual by default: it watches task/report state and shows "Manual Codex Desktop mode" when direct execution is disabled.
+- `codex:run-once` is experimental and disabled by default. It requires both config opt-in and an explicit `--direct-execution` CLI flag before `codex exec` can run.
 - Direct POST calls to disabled or unconfigured dashboard actions return a clear `400` instead of a generic `500`.
 
 See [docs/DESKTOP_DASHBOARD_RUNBOOK_RU.md](docs/DESKTOP_DASHBOARD_RUNBOOK_RU.md) for the Russian runbook.

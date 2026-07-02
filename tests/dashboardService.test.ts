@@ -29,6 +29,7 @@ describe("DashboardService", () => {
         readStatus: async () => undefined,
         inspectEnvironment: async () => ({
           command: "codex",
+          checked: false,
           found: false,
           execAvailable: false,
           directExecutionEnabled: false,
@@ -53,7 +54,8 @@ describe("DashboardService", () => {
     expect(snapshot.ips.geoStatus).toBe("unavailable");
     expect(snapshot.projects[0]?.recommendedAction).toBe("create_task");
     expect(snapshot.components.codexWorker.state).toBe("manual");
-    expect(snapshot.components.codexWorker.meta).toContain("Codex CLI: не найден");
+    expect(snapshot.components.codexWorker.details).toContain("Manual Codex Desktop mode");
+    expect(snapshot.components.codexWorker.meta).toContain("Codex CLI: не проверялся");
   });
 
   it("renders UTF-8 Russian text and exposes running state for active worker", async () => {
@@ -241,6 +243,86 @@ describe("DashboardService", () => {
     expect(html).not.toContain("UNIQUE_RAW_CODEX_SESSION_LOG_START");
     expect(html).not.toContain("UNIQUE_RAW_CODEX_SESSION_LOG_END");
     expect(html).not.toContain("x".repeat(2_000));
+  });
+
+  it("shows manual Codex Desktop mode instead of failed/running worker state when direct execution is disabled", async () => {
+    const service = new DashboardService({
+      fetchImpl: async () => ({ ok: false, json: async () => ({}) }) as Response,
+      projectStatusService: {
+        check: async ({ projectPath }) => ({
+          projectPath,
+          projectName: "demo",
+          git: { isRepo: true, status: "clean", changedFiles: [] },
+          policy: { exists: true, strictReviewGate: true },
+          doctor: { result: "READY", warnings: [] },
+          tasks: { total: 1, pending: 1, reported: 0, approved: 0, rejected: 0, archived: 0 },
+          reports: {},
+          recommendedAction: "wait_for_codex_or_request_report",
+          waitingFor: "codex",
+          nextActor: "codex",
+          nextAction: "Open Codex Desktop and execute task 0007.",
+          warnings: [],
+          errors: []
+        })
+      },
+      codexWorkerService: {
+        readStatus: async () => ({
+          state: "waiting_for_codex",
+          updatedAt: "2026-07-02T08:00:00.000Z",
+          pollIntervalMs: 5000,
+          message: "manual Codex Desktop mode: waiting for report.",
+          currentTask: {
+            projectName: "demo",
+            projectPath: "D:/projects/demo",
+            taskId: "0007",
+            title: "Manual dashboard task",
+            status: "pending",
+            taskPath: ".codex/tasks/0007-task.md",
+            reportPath: ".codex/reports/0007-report.md",
+            reportExists: false,
+            instruction: "Open task file .codex/tasks/0007-task.md."
+          },
+          lastReportStatus: "missing",
+          directCodexLaunchSupported: false,
+          limitations: [],
+          codexCli: {
+            command: "codex",
+            checked: false,
+            found: false,
+            execAvailable: false,
+            directExecutionEnabled: false,
+            sandbox: "read-only",
+            lastError: "manual Codex Desktop mode"
+          },
+          host: "test-host",
+          pid: 1234
+        }),
+        inspectEnvironment: async () => ({
+          command: "codex",
+          checked: false,
+          found: false,
+          execAvailable: false,
+          directExecutionEnabled: false,
+          sandbox: "read-only"
+        })
+      }
+    });
+    const config = createDefaultDashboardConfig("D:/projects/chatgpt-codex-mcp");
+
+    const snapshot = await service.collect({
+      orchestratorRoot: "D:/projects/chatgpt-codex-mcp",
+      configPath: "D:/projects/chatgpt-codex-mcp/scripts/fmax-orchestrator.config.local.json",
+      configExists: true,
+      config
+    });
+    const workerAction = snapshot.actions.find((item) => item.id === "start-codex-worker");
+
+    expect(snapshot.components.codexWorker.state).toBe("manual");
+    expect(workerAction).toMatchObject({
+      state: "idle",
+      statusText: "не запущено"
+    });
+    expect(renderDashboardHtml(snapshot, config)).toContain("Manual Codex Desktop mode");
   });
 
   it("builds idle, starting, running, failed, and disabled action states", () => {

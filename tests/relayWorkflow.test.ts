@@ -15,10 +15,14 @@ describe("relay workflow helpers", () => {
     await createTask(projectPath);
 
     const relay = await new RelayStatusService().check({ projectPath, includeDoctor: false });
+    const next = await new CodexNextService().prepare({ projectPath });
 
     expect(relay.currentTask?.id).toBe("0001");
     expect(relay.waitingFor).toBe("codex");
     expect(relay.nextActor).toBe("codex");
+    expect(next.nextAction).toContain("Open Codex Desktop");
+    expect(next.codexInstruction).toContain("Open task file .codex/tasks/0001-task.md");
+    expect(next.codexInstruction).toContain("Create report .codex/reports/0001-report.md");
   }, 30000);
 
   it("reports review as the next step when report exists", async () => {

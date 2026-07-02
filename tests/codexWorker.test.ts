@@ -1,7 +1,7 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ProjectBootstrap } from "../src/services/projectBootstrap.js";
 import { CodexWorkerService } from "../src/services/codexWorker.js";
 import { TaskStore } from "../src/services/taskStore.js";
@@ -151,6 +151,44 @@ describe("CodexWorkerService", () => {
     expect(result.codexCli.found).toBe(false);
     expect(result.codexCli.execAvailable).toBe(false);
     expect(result.message).toContain("official Codex CLI was not found");
+  }, 20000);
+
+  it("uses manual Codex Desktop mode by default without probing or executing Codex CLI", async () => {
+    const projectPath = await readyProject();
+    const store = new TaskStore();
+    await store.createTask(projectPath, {
+      title: "Manual task",
+      goal: "wait for Codex Desktop"
+    });
+
+    const tempRoot = path.join(os.tmpdir(), `codex-worker-${crypto.randomUUID()}`);
+    await mkdir(tempRoot, { recursive: true });
+    const probe = vi.fn(async () => {
+      throw new Error("Codex CLI probe must not be called in manual mode");
+    });
+    const execute = vi.fn(async () => {
+      throw new Error("codex exec must not run in manual mode");
+    });
+    const service = new CodexWorkerService({
+      officialCodexCli: {
+        probe,
+        execute
+      }
+    });
+
+    const result = await service.run({
+      projects: [{ name: "demo", path: projectPath }],
+      once: true,
+      statusFilePath: path.join(tempRoot, "status.json"),
+      pidFilePath: path.join(tempRoot, "worker.pid")
+    });
+
+    expect(result.state).toBe("task_found");
+    expect(result.message).toContain("manual Codex Desktop mode");
+    expect(result.codexCli.checked).toBe(false);
+    expect(result.codexCli.directExecutionEnabled).toBe(false);
+    expect(probe).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
   }, 20000);
 
   it("can report successful optional codex exec completion when the report appears", async () => {

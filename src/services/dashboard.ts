@@ -163,7 +163,9 @@ const RU = {
   workerLastErrorSummary: "Last error summary",
   workerStatusFile: "Worker status file",
   workerFullDiagnostics: "\u041f\u043e\u043b\u043d\u044b\u0439 stdout/stderr \u043e\u0441\u0442\u0430\u0451\u0442\u0441\u044f \u0442\u043e\u043b\u044c\u043a\u043e \u0432 worker status file/report.",
-  workerSandbox: "Sandbox"
+  workerSandbox: "Sandbox",
+  workerManualMode: "Manual Codex Desktop mode",
+  workerManualHint: "\u041e\u0442\u043a\u0440\u043e\u0439\u0442\u0435 Codex Desktop \u0438 \u0432\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u0437\u0430\u0434\u0430\u0447\u0443 \u0438\u0437 .codex/tasks; worker \u0442\u043e\u043b\u044c\u043a\u043e \u0441\u043b\u0435\u0434\u0438\u0442 \u0437\u0430 report."
 } as const;
 
 const WORKER_DIAGNOSTIC_SUMMARY_LIMIT = 240;
@@ -405,7 +407,7 @@ export class DashboardService {
       return {
         name: "Codex Worker",
         state: config.commands.codexWorker ? "manual" : "offline",
-        details: RU.workerNotStarted,
+        details: config.worker.directExecution.enabled ? RU.workerNotStarted : `${RU.workerManualMode}: ${RU.workerManualHint}`,
         actionLabel: RU.startCodexWorker,
         actionState: config.commands.codexWorker ? "idle" : "disabled",
         meta: [...buildWorkerMeta(runtime, config.worker.statusFilePath), `${RU.workerLimitations}: ${RU.workerDirectLaunch}`]
@@ -841,7 +843,7 @@ function mapProjectStatus(name: string, status: ProjectStatusResult): DashboardP
 }
 
 function mapWorkerStatus(status: CodexWorkerStatus, statusFilePath: string): DashboardComponentStatus {
-  const state = workerStateToComponentState(status.state);
+  const state = workerStateToComponentState(status.state, status.codexCli.directExecutionEnabled);
   const meta = [
     status.currentTask
       ? `${RU.workerTask}: ${status.currentTask.projectName} / ${status.currentTask.taskId} / ${status.currentTask.title}`
@@ -856,12 +858,16 @@ function mapWorkerStatus(status: CodexWorkerStatus, statusFilePath: string): Das
     state,
     details: `${status.message} (${status.updatedAt})`,
     actionLabel: RU.startCodexWorker,
-    actionState: workerStateToActionState(status.state),
+    actionState: workerStateToActionState(status.state, status.codexCli.directExecutionEnabled),
     meta
   };
 }
 
-function workerStateToActionState(state: CodexWorkerStatus["state"]): DashboardActionVisualState {
+function workerStateToActionState(state: CodexWorkerStatus["state"], directExecutionEnabled: boolean): DashboardActionVisualState {
+  if (!directExecutionEnabled && state !== "error") {
+    return "idle";
+  }
+
   switch (state) {
     case "idle":
       return "idle";
@@ -876,6 +882,20 @@ function workerStateToActionState(state: CodexWorkerStatus["state"]): DashboardA
 
 function buildWorkerMeta(status: CodexWorkerStatus["codexCli"], statusFilePath: string): string[] {
   const lastErrorSummary = summarizeWorkerDiagnostic(status.lastError);
+  if (!status.directExecutionEnabled) {
+    return [
+      `${RU.workerManualMode}: ${RU.workerManualHint}`,
+      `${RU.workerCliFound}: ${status.checked === false ? "\u043d\u0435 \u043f\u0440\u043e\u0432\u0435\u0440\u044f\u043b\u0441\u044f" : status.found ? "\u043d\u0430\u0439\u0434\u0435\u043d" : "\u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d"}`,
+      `${RU.workerExecAvailable}: \u043e\u0442\u043a\u043b\u044e\u0447\u0451\u043d`,
+      `${RU.workerDirectExecution}: \u0432\u044b\u043a\u043b\u044e\u0447\u0435\u043d\u043e`,
+      `${RU.workerSandbox}: ${status.sandbox}`,
+      `${RU.workerLastExitCode}: ${status.lastExitCode ?? "\u043d\u0435\u0442"}`,
+      `${RU.workerLastErrorSummary}: ${lastErrorSummary ?? "\u043d\u0435\u0442"}`,
+      `${RU.workerStatusFile}: ${statusFilePath}`,
+      ...(status.lastError && status.checked !== false ? [RU.workerFullDiagnostics] : [])
+    ];
+  }
+
   return [
     `${RU.workerCliFound}: ${status.found ? "\u043d\u0430\u0439\u0434\u0435\u043d" : "\u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d"}`,
     `${RU.workerExecAvailable}: ${status.execAvailable ? "\u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d" : "\u043d\u0435 \u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d"}`,
@@ -934,7 +954,11 @@ function extractPattern(value: string, pattern: RegExp): string | undefined {
   return value.match(pattern)?.[0];
 }
 
-function workerStateToComponentState(state: CodexWorkerStatus["state"]): DashboardComponentState {
+function workerStateToComponentState(state: CodexWorkerStatus["state"], directExecutionEnabled: boolean): DashboardComponentState {
+  if (!directExecutionEnabled && state !== "error") {
+    return "manual";
+  }
+
   switch (state) {
     case "idle":
       return "manual";

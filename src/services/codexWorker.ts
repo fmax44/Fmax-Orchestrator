@@ -22,6 +22,7 @@ export interface CodexWorkerDirectExecutionConfig {
 export interface CodexCliStatusSnapshot {
   command: string;
   commandPath?: string;
+  checked?: boolean;
   found: boolean;
   execAvailable: boolean;
   directExecutionEnabled: boolean;
@@ -72,6 +73,7 @@ export interface CodexWorkerDependencies {
 }
 
 interface CodexCliProbeResult {
+  checked: boolean;
   commandPath?: string;
   found: boolean;
   execAvailable: boolean;
@@ -87,8 +89,12 @@ interface CodexCliExecutionResult {
 
 const LIMITATIONS = [
   "Worker cannot safely drive Codex Desktop or submit prompts automatically from this CLI process.",
-  "Worker only watches the queue, emits the Codex payload, and waits for a report file."
+  "Worker only watches the queue, emits the Codex payload, and waits for a report file.",
+  "Manual Codex Desktop mode is the default workflow; codex exec is opt-in only."
 ] as const;
+
+const MANUAL_CODEX_DESKTOP_MODE =
+  "manual Codex Desktop mode: direct execution is disabled; open Codex Desktop, run the task from .codex/tasks, and create the report in .codex/reports.";
 
 export class CodexWorkerService {
   private readonly codexNextService: Pick<CodexNextService, "prepare">;
@@ -154,10 +160,11 @@ export class CodexWorkerService {
 
   async inspectEnvironment(directExecution?: Partial<CodexWorkerDirectExecutionConfig>): Promise<CodexCliStatusSnapshot> {
     const normalized = normalizeDirectExecutionConfig(directExecution);
-    const probe = await this.officialCodexCli.probe(normalized);
+    const probe = await this.probeCodexCli(normalized);
     return {
       command: normalized.command,
       commandPath: probe.commandPath,
+      checked: probe.checked,
       found: probe.found,
       execAvailable: probe.execAvailable,
       directExecutionEnabled: normalized.enabled,
@@ -177,7 +184,7 @@ export class CodexWorkerService {
     directExecution: CodexWorkerDirectExecutionConfig;
     previousStatus?: CodexWorkerStatus;
   }): Promise<CodexWorkerStatus> {
-    const cliProbe = await this.officialCodexCli.probe(input.directExecution);
+    const cliProbe = await this.probeCodexCli(input.directExecution);
 
     for (const project of input.projects) {
       const result = await this.codexNextService.prepare({ projectPath: project.path });
@@ -276,7 +283,7 @@ export class CodexWorkerService {
         return buildStatus("waiting_for_codex", input.pollIntervalMs, {
           currentTask: task,
           lastReportStatus: "missing",
-          message: `Waiting for Codex report for task ${task.taskId} in ${project.name}.`,
+          message: `${MANUAL_CODEX_DESKTOP_MODE} Waiting for report ${task.reportPath} for task ${task.taskId} in ${project.name}.`,
           codexCli: mergeCliStatus(input.directExecution, cliProbe, previousCli)
         });
       }
@@ -284,7 +291,7 @@ export class CodexWorkerService {
       return buildStatus("task_found", input.pollIntervalMs, {
         currentTask: task,
         lastReportStatus: "missing",
-        message: `Pending task ${task.taskId} found in ${project.name}. Worker prepared the Codex payload and is now waiting for a report.`,
+        message: `${MANUAL_CODEX_DESKTOP_MODE} Pending task ${task.taskId} found in ${project.name}. Worker prepared the Codex Desktop instruction and is watching for ${task.reportPath}.`,
         codexCli: mergeCliStatus(input.directExecution, cliProbe, previousCli)
       });
     }
@@ -292,9 +299,19 @@ export class CodexWorkerService {
     return buildStatus("idle", input.pollIntervalMs, {
       currentTask: undefined,
       lastReportStatus: input.previousStatus?.lastReportStatus,
-      message: "No pending tasks were found in managed projects.",
+      message: input.directExecution.enabled
+        ? "No pending tasks were found in managed projects."
+        : `${MANUAL_CODEX_DESKTOP_MODE} No pending tasks were found in managed projects.`,
       codexCli: mergeCliStatus(input.directExecution, cliProbe, input.previousStatus?.codexCli)
     });
+  }
+
+  private async probeCodexCli(directExecution: CodexWorkerDirectExecutionConfig): Promise<CodexCliProbeResult> {
+    if (!directExecution.enabled) {
+      return createManualCodexProbe();
+    }
+
+    return this.officialCodexCli.probe(directExecution);
   }
 }
 
@@ -320,9 +337,14 @@ function buildStatus(
 
 class OfficialCodexCli {
   async probe(config: CodexWorkerDirectExecutionConfig): Promise<CodexCliProbeResult> {
+    if (!config.enabled) {
+      return createManualCodexProbe();
+    }
+
     const commandPath = await resolveCommandPath(config.command);
     if (!commandPath) {
       return {
+        checked: true,
         found: false,
         execAvailable: false,
         error: `Command not found: ${config.command}`
@@ -332,6 +354,7 @@ class OfficialCodexCli {
     const version = await runCommand(config.command, ["--version"], process.cwd(), 30_000);
     if (version.exitCode !== 0) {
       return {
+        checked: true,
         commandPath,
         found: true,
         execAvailable: false,
@@ -341,6 +364,7 @@ class OfficialCodexCli {
 
     const execHelp = await runCommand(config.command, ["exec", "--help"], process.cwd(), 30_000);
     return {
+      checked: true,
       commandPath,
       found: true,
       execAvailable: execHelp.exitCode === 0,
@@ -372,6 +396,15 @@ class OfficialCodexCli {
   }
 }
 
+function createManualCodexProbe(): CodexCliProbeResult {
+  return {
+    checked: false,
+    found: false,
+    execAvailable: false,
+    error: MANUAL_CODEX_DESKTOP_MODE
+  };
+}
+
 function normalizeDirectExecutionConfig(
   input: Partial<CodexWorkerDirectExecutionConfig> | undefined
 ): CodexWorkerDirectExecutionConfig {
@@ -391,21 +424,24 @@ function mergeCliStatus(
   previous: CodexCliStatusSnapshot | undefined,
   override: Partial<Pick<CodexCliStatusSnapshot, "lastExitCode" | "lastError">> = {}
 ): CodexCliStatusSnapshot {
+  const manualMode = !directExecution.enabled || probe.checked === false;
   return {
     command: directExecution.command,
-    commandPath: probe.commandPath ?? previous?.commandPath,
+    commandPath: manualMode ? undefined : probe.commandPath ?? previous?.commandPath,
+    checked: probe.checked,
     found: probe.found,
     execAvailable: probe.execAvailable,
     directExecutionEnabled: directExecution.enabled,
     sandbox: directExecution.sandbox,
-    lastExitCode: override.lastExitCode ?? previous?.lastExitCode,
-    lastError: override.lastError ?? probe.error ?? previous?.lastError
+    lastExitCode: manualMode ? override.lastExitCode : override.lastExitCode ?? previous?.lastExitCode,
+    lastError: override.lastError ?? probe.error ?? (manualMode ? undefined : previous?.lastError)
   };
 }
 
 function createUnavailableCliStatus(directExecution: CodexWorkerDirectExecutionConfig): CodexCliStatusSnapshot {
   return {
     command: directExecution.command,
+    checked: false,
     found: false,
     execAvailable: false,
     directExecutionEnabled: directExecution.enabled,

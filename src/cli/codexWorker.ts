@@ -16,6 +16,7 @@ try {
   }
 
   const service = new CodexWorkerService();
+  const directExecutionEnabled = args.directExecution && loaded.config.worker.directExecution.enabled;
   const result = await service.run({
     projects: managedProjects,
     pollIntervalMs: args.pollIntervalMs ?? loaded.config.worker.pollIntervalMs,
@@ -24,9 +25,9 @@ try {
     pidFilePath: loaded.config.worker.pidFilePath,
     directExecution: {
       ...loaded.config.worker.directExecution,
-      enabled: args.directExecution || loaded.config.worker.directExecution.enabled,
+      enabled: directExecutionEnabled,
       command: args.codexCommand ?? loaded.config.worker.directExecution.command,
-      sandbox: args.codexSandbox ?? loaded.config.worker.directExecution.sandbox,
+      sandbox: directExecutionEnabled ? args.codexSandbox ?? loaded.config.worker.directExecution.sandbox : "read-only",
       timeoutMs: args.codexTimeoutMs ?? loaded.config.worker.directExecution.timeoutMs,
       dryRun: args.codexDryRun || loaded.config.worker.directExecution.dryRun,
       extraArgs: args.codexExtraArgs.length > 0 ? args.codexExtraArgs : loaded.config.worker.directExecution.extraArgs

@@ -74,7 +74,7 @@ export interface ToolHandlers {
   projectStatus(input: { projectPath: string; includeSmoke?: boolean; includeDoctor?: boolean; includeReview?: boolean; taskId?: string }): Promise<unknown>;
   relayStatus(input: { projectPath: string; includeSmoke?: boolean; includeDoctor?: boolean; includeReview?: boolean; taskId?: string }): Promise<unknown>;
   codexNext(input: { projectPath: string; watch?: boolean; timeoutMs?: number; pollIntervalMs?: number }): Promise<unknown>;
-  codexAutonomousRun(input: { projectPath?: string; timeoutMs?: number; pollIntervalMs?: number; dryRun?: boolean }): Promise<unknown>;
+  codexAutonomousRun(input: { projectPath?: string; timeoutMs?: number; pollIntervalMs?: number; dryRun?: boolean; allowDirectExecution?: boolean }): Promise<unknown>;
   startCodexWorker(input: { projectPath?: string; pollIntervalMs?: number }): Promise<unknown>;
   codexWorkerStatus(input: Record<string, never>): Promise<unknown>;
   createNextTask(input: {
@@ -215,6 +215,7 @@ export function createToolHandlers(
       const projects = input.projectPath
         ? selectAutonomousRunProjects(loaded.config.managedProjects, input.projectPath)
         : loaded.config.managedProjects;
+      const directExecutionEnabled = Boolean(input.allowDirectExecution && loaded.config.worker.directExecution.enabled);
       return codexAutonomousRunService.run({
         projects,
         projectPath: input.projectPath,
@@ -224,7 +225,11 @@ export function createToolHandlers(
         waitTimeoutMs: input.timeoutMs,
         dryRun: input.dryRun,
         localConfigExists: loaded.localConfigExists,
-        directExecution: loaded.config.worker.directExecution
+        directExecution: {
+          ...loaded.config.worker.directExecution,
+          enabled: directExecutionEnabled,
+          sandbox: directExecutionEnabled ? loaded.config.worker.directExecution.sandbox : "read-only"
+        }
       });
     },
     async startCodexWorker(input) {
@@ -248,14 +253,18 @@ export function createToolHandlers(
         command: [command.command, ...(command.args ?? []), ...extraArgs].join(" "),
         workerStatusFile: loaded.config.worker.statusFilePath,
         directCodexLaunchSupported: false,
-        directExecutionEnabled: loaded.config.worker.directExecution.enabled
+        directExecutionEnabled: false
       };
     },
     async codexWorkerStatus() {
       const loaded = await loadDashboardConfig(process.cwd());
       return {
         status: await codexWorkerService.readStatus(loaded.config.worker.statusFilePath),
-        runtime: await codexWorkerService.inspectEnvironment(loaded.config.worker.directExecution),
+        runtime: await codexWorkerService.inspectEnvironment({
+          ...loaded.config.worker.directExecution,
+          enabled: false,
+          sandbox: "read-only"
+        }),
         statusFilePath: loaded.config.worker.statusFilePath,
         pidFilePath: loaded.config.worker.pidFilePath
       };
@@ -497,12 +506,13 @@ export function registerTools(server: McpServer, handlers = createToolHandlers()
     "codex_autonomous_run",
     {
       title: "Controlled Codex Autonomous Run",
-      description: "Run one controlled autonomous Codex execution loop for the next pending task without auto-approving, auto-committing, or auto-pushing.",
+      description: "Experimental opt-in: run one controlled Codex CLI execution loop for the next pending task. Disabled by default and never auto-approves, auto-commits, or auto-pushes.",
       inputSchema: {
         projectPath: z.string().optional(),
         timeoutMs: z.number().int().positive().optional(),
         pollIntervalMs: z.number().int().positive().optional(),
-        dryRun: z.boolean().default(false)
+        dryRun: z.boolean().default(false),
+        allowDirectExecution: z.boolean().default(false).describe("Experimental opt-in. codex exec can run only when this is true and worker.directExecution.enabled is true in config.")
       }
     },
     async (args) => toolResult(() => handlers.codexAutonomousRun(args))
@@ -512,7 +522,7 @@ export function registerTools(server: McpServer, handlers = createToolHandlers()
     "start_codex_worker",
     {
       title: "Start Codex Worker",
-      description: "Start the local Codex Worker watcher process without auto-approving or auto-committing.",
+      description: "Start the local Codex Worker watcher/manual bridge process without auto-approving, auto-committing, or running Codex CLI by default.",
       inputSchema: {
         projectPath: z.string().optional(),
         pollIntervalMs: z.number().int().positive().optional()

@@ -109,6 +109,29 @@ describe("MCP tool registry", () => {
     });
   }, 15000);
 
+  it("keeps codex_autonomous_run in manual mode unless direct execution is explicitly allowed", async () => {
+    const projectPath = await readyProject();
+    const handlers = createToolHandlers();
+
+    await handlers.createTask({
+      projectPath,
+      title: "Manual Codex Desktop task",
+      goal: "Verify autonomous run stays blocked by default",
+      acceptanceCriteria: ["codex exec is not invoked"]
+    });
+
+    await expect(
+      handlers.codexAutonomousRun({
+        projectPath
+      })
+    ).resolves.toMatchObject({
+      executionState: "blocked",
+      directExecutionEnabled: false,
+      nextRecommendedAction: "manual_codex_run",
+      reportExists: false
+    });
+  }, 15000);
+
   it("returns a structured MCP error payload for read_report when the report is missing", async () => {
     const projectPath = await readyProject();
     const handlers = createToolHandlers();

@@ -53,8 +53,11 @@ describe("CodexAutonomousRunService", () => {
     });
 
     expect(result.executionState).toBe("blocked");
-    expect(result.nextRecommendedAction).toBe("fix_blocker");
-    expect(result.directExecutionReason).toContain("worker.directExecution.enabled is false");
+    expect(result.nextRecommendedAction).toBe("manual_codex_run");
+    expect(result.directExecutionReason).toContain("Direct execution is disabled for this run");
+    expect(result.message).toContain("Manual Codex Desktop mode");
+    expect(result.message).toContain("codex exec was not invoked");
+    expect(result.plannedCommand).toBeUndefined();
     expect(workerRun).not.toHaveBeenCalled();
     expect(inspectEnvironment).not.toHaveBeenCalled();
   });

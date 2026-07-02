@@ -11,6 +11,7 @@
 - Tunnel is running only when both `healthz` and `readyz` respond; `healthz` without `readyz` is shown as starting.
 - MCP is running only when an explicit MCP health URL responds successfully; stdio-only MCP remains idle/manual instead of fake running.
 - Codex Worker is running only from worker status states that indicate active work, and failed when the worker status is `error`.
+- Codex Worker is optional/manual by default. When direct execution is disabled, the dashboard shows "Manual Codex Desktop mode" and does not mark the worker failed just because Codex CLI is not being used.
 - The Codex Worker card shows compact state, report/task status, CLI availability, sandbox, last exit code, and a short `Last error summary`.
 - Raw Codex stdout/stderr and full session logs are not rendered in the main dashboard card. Use the worker status file or report for full diagnostics.
 - Long card values are wrapped and clamped so stale metadata cannot stretch the dashboard layout.
@@ -83,6 +84,8 @@ npm run dashboard -- --help
 
 ## Codex Worker
 
+По умолчанию Codex Worker - это watcher/bridge для manual Codex Desktop workflow. Он читает `managedProjects`, находит pending task, готовит инструкцию для Codex Desktop и ждёт появления `.codex/reports/<taskId>-report.md`. Он не должен автоматически запускать `codex exec` без явного opt-in.
+
 Из dashboard:
 
 - нажмите `Запустить Codex Worker`
@@ -108,6 +111,8 @@ npm run codex:worker -- --project "D:\projects\orchestrator-product-trial" --onc
 
 ## Controlled Autonomous Codex Run
 
+Это экспериментальный режим, а не основной workflow. Для штатной работы используйте tunnel/MCP, `codex:next`, ручное выполнение в Codex Desktop, report, Review Gate и approve.
+
 Для одного контролируемого запуска:
 
 ```powershell
@@ -118,6 +123,7 @@ npm run codex:run-once -- --project "D:\projects\chatgpt-codex-mcp" --dry-run --
 Гарантии:
 
 - direct execution остаётся opt-in
+- без `--direct-execution` CLI не вызывает `codex exec`, даже если старый local config содержит enabled direct execution
 - `dry-run` не вызывает `codex exec`
 - нет GUI automation, clipboard automation, window control или prompt injection
 - нет auto-approve, auto-commit, auto-push или auto-archive
