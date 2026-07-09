@@ -4,7 +4,9 @@ import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { execaCommand } from "execa";
+import { DoctorService } from "../src/services/doctor.js";
 import { ProjectBootstrap } from "../src/services/projectBootstrap.js";
+import { ProjectPolicyService } from "../src/services/projectPolicy.js";
 import { ReviewGateService } from "../src/services/reviewGate.js";
 import { TaskStore } from "../src/services/taskStore.js";
 import { createToolHandlers } from "../src/mcp/tools.js";
@@ -185,6 +187,55 @@ describe("ReviewGateService", () => {
     expect(result.reviewHash).toMatch(/^sha256:/);
     expect(task?.lastReviewGate?.reviewHash).toBe(result.reviewHash);
     expect(task?.lastReviewGate?.reviewReportPath).toBe(`.codex/reports/${taskId}-review.md`);
+  }, 15000);
+
+  it("maps human-readable required checks to executable commands", async () => {
+    const projectPath = await readyProject("docker-compose");
+    const task = await new TaskStore().createTask(projectPath, {
+      title: "Docker checks",
+      goal: "Verify readable check labels",
+      requiredChecks: [
+        "backend health check",
+        "backend/scripts/smoke_test_rag_answer_quality.py",
+        "docker-compose.prod.yml config",
+        "frontend npm run build"
+      ]
+    });
+    await writeFile(path.join(projectPath, ".codex", "reports", `${task.id}-report.md`), `# Report for Task ${task.id}\n\nChecks mapped.\n`, "utf8");
+    const observedCommands: string[] = [];
+    const testRunner = {
+      async run(_projectPath: string, commands: string[]) {
+        observedCommands.push(...commands);
+        return {
+          results: commands.map((command) => ({
+            command,
+            exitCode: 0,
+            stdout: "",
+            stderr: "",
+            durationMs: 1,
+            timedOut: false
+          }))
+        };
+      }
+    };
+
+    const result = await new ReviewGateService(
+      new TaskStore(),
+      new ProjectPolicyService(),
+      new DoctorService(),
+      testRunner as never
+    ).run({
+      projectPath,
+      taskId: task.id
+    });
+
+    expect(result.decision).toBe("APPROVABLE");
+    expect(observedCommands).toEqual([
+      "curl.exe -sS -f http://localhost:8000/health",
+      "docker compose exec -T backend python scripts/smoke_test_rag_answer_quality.py",
+      "docker compose -f docker-compose.prod.yml config --quiet",
+      "npm --prefix frontend run build"
+    ]);
   }, 15000);
 });
 

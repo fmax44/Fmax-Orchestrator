@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createToolHandlers, registerTools, toolNames } from "../src/mcp/tools.js";
@@ -154,6 +154,53 @@ describe("MCP tool registry", () => {
 
     expect(payload.ok).toBe(false);
     expect(payload.error.message).toContain("Task not found");
+  }, 15000);
+
+  it("returns a valid MCP review_gate payload when required checks fail", async () => {
+    const projectPath = await readyProject();
+    const handlers = createToolHandlers();
+    const task = await handlers.createTask({
+      projectPath,
+      title: "Review payload task",
+      goal: "Verify review_gate MCP response stability",
+      acceptanceCriteria: ["review_gate returns JSON text content"],
+      requiredChecks: ["node -e \"process.exit(1)\""]
+    }) as { taskId: string };
+    await writeFile(
+      path.join(projectPath, ".codex", "reports", `${task.taskId}-report.md`),
+      `# Report for Task ${task.taskId}\n\nSmoke report.\n`,
+      "utf8"
+    );
+
+    const registeredTools: Array<{
+      name: string;
+      callback: (args: Record<string, unknown>) => Promise<{ content: Array<{ text: string }> }>;
+    }> = [];
+    const server = {
+      registerTool(name: string, _config: unknown, callback: (args: Record<string, unknown>) => Promise<{ content: Array<{ text: string }> }>) {
+        registeredTools.push({ name, callback });
+      }
+    };
+    registerTools(server as never, handlers);
+    const tool = registeredTools.find((entry) => entry.name === "review_gate");
+
+    expect(tool).toBeDefined();
+
+    const result = await tool.callback({
+      projectPath,
+      taskId: task.taskId,
+      requireReport: true,
+      requireCleanForbiddenPaths: true,
+      writeReport: false,
+      format: "json"
+    });
+    const payload = JSON.parse(result.content[0].text) as { taskId: string; decision: string; errors: string[] };
+
+    expect(payload).toMatchObject({
+      taskId: task.taskId,
+      decision: "BLOCKED"
+    });
+    expect(payload.errors).toContain("Required check failed: node -e \"process.exit(1)\"");
   }, 15000);
 });
 

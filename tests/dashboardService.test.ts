@@ -358,6 +358,62 @@ describe("DashboardService", () => {
       statusText: "не запущено"
     });
   });
+
+  it("shows stdio MCP as available through tunnel when tunnel is running", () => {
+    const config = createDefaultDashboardConfig("D:/projects/chatgpt-codex-mcp");
+    const oldRuntimeTimestamp = new Date(Date.now() - 60_000).toISOString();
+
+    const actions = buildDashboardActions(config, {
+      mcpServer: {
+        name: "MCP",
+        state: "manual",
+        details: "Команда запуска настроена. Для stdio MCP-сервера не задан отдельный HTTP health-check.",
+        actionState: "idle"
+      },
+      tunnel: { name: "Tunnel", state: "online", details: "ready", actionState: "running" },
+      codexWorker: { name: "Codex Worker", state: "manual", details: "manual", actionState: "idle" }
+    }, {
+      "start-mcp": {
+        state: "starting",
+        message: "Команда запущена, ожидаем подтверждение статуса.",
+        updatedAt: oldRuntimeTimestamp
+      }
+    });
+
+    expect(actions.find((item) => item.id === "start-mcp")).toMatchObject({
+      state: "running",
+      statusText: "через tunnel"
+    });
+  });
+
+  it("keeps stdio MCP idle instead of failed when no HTTP health-check or tunnel can confirm startup", () => {
+    const config = createDefaultDashboardConfig("D:/projects/chatgpt-codex-mcp");
+    const oldRuntimeTimestamp = new Date(Date.now() - 60_000).toISOString();
+
+    const actions = buildDashboardActions(config, {
+      mcpServer: {
+        name: "MCP",
+        state: "manual",
+        details: "Команда запуска настроена. Для stdio MCP-сервера не задан отдельный HTTP health-check.",
+        actionState: "idle"
+      },
+      tunnel: { name: "Tunnel", state: "offline", details: "offline", actionState: "idle" },
+      codexWorker: { name: "Codex Worker", state: "manual", details: "manual", actionState: "idle" }
+    }, {
+      "start-mcp": {
+        state: "starting",
+        message: "Команда запущена, ожидаем подтверждение статуса.",
+        updatedAt: oldRuntimeTimestamp
+      }
+    });
+
+    expect(actions.find((item) => item.id === "start-mcp")).toMatchObject({
+      state: "idle",
+      statusText: "не запущено",
+      details: "Команда запуска настроена. Для stdio MCP-сервера не задан отдельный HTTP health-check."
+    });
+  });
+
   it("renders visual action state classes on dashboard buttons", () => {
     const config = createDefaultDashboardConfig("D:/projects/chatgpt-codex-mcp");
     config.apps.vpnPath = "C:/VPN/VPN.exe";

@@ -121,7 +121,7 @@ export class ReviewGateService {
       }
     }
 
-    const requestedChecks = await this.resolveRequestedChecks(root, options.taskId, options.checks, policy);
+    const requestedChecks = (await this.resolveRequestedChecks(root, options.taskId, options.checks, policy)).map(resolveCheckCommand);
     if (requestedChecks.length === 0) {
       checks.push(warn("required_checks", "No checks were provided."));
       warnings.push("No checks were provided.");
@@ -215,6 +215,28 @@ export class ReviewGateService {
     const profileKey = policy?.defaultProfile === "docker-compose" ? "docker-compose" : "node";
     return policy?.requiredChecks?.[profileKey] ?? [];
   }
+}
+
+function resolveCheckCommand(check: string): string {
+  const trimmed = check.trim();
+
+  if (trimmed === "backend health check") {
+    return "curl.exe -sS -f http://localhost:8000/health";
+  }
+
+  if (/^backend\/scripts\/[^/\s]+\.py$/.test(trimmed)) {
+    return `docker compose exec -T backend python scripts/${path.basename(trimmed)}`;
+  }
+
+  if (trimmed === "docker-compose.prod.yml config") {
+    return "docker compose -f docker-compose.prod.yml config --quiet";
+  }
+
+  if (trimmed === "frontend npm run build") {
+    return "npm --prefix frontend run build";
+  }
+
+  return trimmed;
 }
 
 export function formatReviewGateText(result: ReviewGateResult): string {

@@ -671,7 +671,14 @@ export function buildDashboardActions(
 
   const openVpnState = buildLaunchActionState(openVpnEnabled, runtime["open-vpn"]);
   const tunnelState = buildServiceActionState(startTunnelEnabled, components?.tunnel.actionState, runtime["start-tunnel"], components?.tunnel.details);
-  const mcpState = buildMcpActionState(startMcpEnabled, Boolean(config.health.mcpHealthUrl), components?.mcpServer.actionState, runtime["start-mcp"], components?.mcpServer.details);
+  const mcpState = buildMcpActionState(
+    startMcpEnabled,
+    Boolean(config.health.mcpHealthUrl),
+    components?.mcpServer.actionState,
+    runtime["start-mcp"],
+    components?.mcpServer.details,
+    components?.tunnel.actionState
+  );
   const openChatgptState = buildLaunchActionState(openChatgptEnabled, runtime["open-chatgpt"]);
   const openCodexState = buildLaunchActionState(openCodexEnabled, runtime["open-codex"]);
   const openConfigState = buildLaunchActionState(true, runtime["open-config"]);
@@ -791,17 +798,40 @@ function buildMcpActionState(
   hasReliableHealth: boolean,
   componentState: DashboardActionVisualState | undefined,
   runtime: DashboardActionRuntimeState | undefined,
-  componentDetails?: string
+  componentDetails?: string,
+  tunnelActionState?: DashboardActionVisualState
 ): Pick<DashboardActionState, "state" | "statusText" | "details"> {
-  const base = buildServiceActionState(enabled, hasReliableHealth ? componentState : undefined, runtime, componentDetails);
-  if (base.state === "idle" && enabled && !hasReliableHealth) {
-    return {
-      ...base,
-      details: runtime?.message ?? "\u041d\u0435\u0442 \u0434\u043e\u0441\u0442\u043e\u0432\u0435\u0440\u043d\u043e\u0433\u043e health-check \u0434\u043b\u044f MCP."
-    };
+  if (!hasReliableHealth) {
+    if (!enabled) {
+      return buildActionState(false, "idle");
+    }
+
+    if (runtime?.state === "failed") {
+      return buildActionState(true, "failed", runtime.message);
+    }
+
+    if (runtime?.state === "starting" && isRuntimeFresh(runtime)) {
+      return buildActionState(true, "starting", runtime.message);
+    }
+
+    if (tunnelActionState === "running") {
+      return {
+        state: "running",
+        statusText: "\u0447\u0435\u0440\u0435\u0437 tunnel",
+        details: componentDetails
+          ? `${componentDetails} \u041e\u0441\u043d\u043e\u0432\u043d\u043e\u0439 MCP \u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d \u0447\u0435\u0440\u0435\u0437 \u0433\u043e\u0442\u043e\u0432\u044b\u0439 tunnel.`
+          : "\u041e\u0441\u043d\u043e\u0432\u043d\u043e\u0439 MCP \u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d \u0447\u0435\u0440\u0435\u0437 \u0433\u043e\u0442\u043e\u0432\u044b\u0439 tunnel."
+      };
+    }
+
+    return buildActionState(
+      true,
+      "idle",
+      componentDetails ?? "\u0414\u043b\u044f stdio MCP-\u0441\u0435\u0440\u0432\u0435\u0440\u0430 \u043d\u0435\u0442 \u0434\u043e\u0441\u0442\u043e\u0432\u0435\u0440\u043d\u043e\u0433\u043e HTTP health-check; \u0440\u0430\u0431\u043e\u0442\u0443 \u043f\u0440\u043e\u0432\u0435\u0440\u044f\u0435\u043c \u0447\u0435\u0440\u0435\u0437 MCP self-test \u0438 tunnel readyz."
+    );
   }
 
-  return base;
+  return buildServiceActionState(enabled, componentState, runtime, componentDetails);
 }
 
 function buildWorkerActionState(
