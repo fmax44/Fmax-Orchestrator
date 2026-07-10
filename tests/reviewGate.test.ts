@@ -272,6 +272,43 @@ describe("ReviewGateService", () => {
     expect(result.errors).toContain('Required check timed out: node -e "setTimeout(() => {}, 1000)"');
     expect(JSON.parse(JSON.stringify(result))).toMatchObject({ taskId, decision: "BLOCKED" });
   }, 15000);
+
+  it("uses an extended timeout for required checks", async () => {
+    const projectPath = await readyProject("node");
+    const taskId = await docsTaskWithReport(projectPath);
+    let observedTimeoutMs: number | undefined;
+    const testRunner = {
+      async run(_projectPath: string, commands: string[], options: { timeoutMs?: number }) {
+        observedTimeoutMs = options.timeoutMs;
+        return {
+          results: commands.map((command) => ({
+            command,
+            exitCode: 0,
+            stdout: "",
+            stderr: "",
+            durationMs: 154_850,
+            timedOut: false,
+            truncated: false
+          }))
+        };
+      }
+    };
+
+    const result = await new ReviewGateService(
+      new TaskStore(),
+      new ProjectPolicyService(),
+      new DoctorService(),
+      testRunner as never
+    ).run({
+      projectPath,
+      taskId,
+      checks: ["npm test -- --maxWorkers 1 --minWorkers 1"]
+    });
+
+    expect(observedTimeoutMs).toBe(240_000);
+    expect(result.decision).toBe("APPROVABLE");
+    expect(result.errors).not.toContain("Required check timed out: npm test -- --maxWorkers 1 --minWorkers 1");
+  }, 15000);
 });
 
 describe("approve_task Review Gate integration", () => {

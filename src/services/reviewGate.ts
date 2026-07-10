@@ -11,6 +11,7 @@ import { getCodexPaths, toProjectRelative } from "../utils/paths.js";
 export type ReviewGateDecision = "APPROVABLE" | "NEEDS_REVIEW" | "BLOCKED";
 export type ReviewGateCheckStatus = "pass" | "warn" | "fail";
 export type ReviewGateRecommendedAction = "approve_task" | "manual_review" | "reject_task";
+const requiredCheckTimeoutMs = 240_000;
 
 export interface ReviewGateCheck {
   name: string;
@@ -127,7 +128,7 @@ export class ReviewGateService {
       checks.push(warn("required_checks", "No checks were provided."));
       warnings.push("No checks were provided.");
     } else {
-      const run = await this.testRunner.run(root, requestedChecks, { cancelSignal: options.cancelSignal }).catch((error: unknown) => {
+      const run = await this.testRunner.run(root, requestedChecks, { cancelSignal: options.cancelSignal, timeoutMs: requiredCheckTimeoutMs }).catch((error: unknown) => {
         errors.push(error instanceof Error ? error.message : String(error));
         return undefined;
       });
