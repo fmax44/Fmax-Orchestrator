@@ -44,6 +44,17 @@ npm run build
 npm start
 ```
 
+`npm start` удобен для ручной проверки в терминале, но MCP-клиенту нужно указывать
+прямую stdio-команду без npm-обёртки:
+
+```text
+node D:\projects\chatgpt-codex-mcp\dist\index.js
+```
+
+Вывод `npm` или `tsx` в stdout до MCP `initialize` может быть принят клиентом за
+protocol response и привести к `invalid initialize response`. Сам MCP runtime
+перенаправляет console-логи в stderr; stdout зарезервирован только для JSON-RPC.
+
 Для разработки:
 
 ```bash
@@ -51,6 +62,11 @@ npm run dev
 ```
 
 Сервер использует stdio-транспорт, поэтому обычно его запускает MCP-клиент.
+
+`run_tests` и `review_gate` возвращают timeout как structured result: команда
+получает `timedOut: true`, exit code `124`, а Review Gate возвращает понятный
+`BLOCKED`. Отмена MCP-запроса также передаётся дочерней команде, чтобы не оставлять
+зависшие процессы.
 
 ## MVP-3: подготовка рабочего проекта
 

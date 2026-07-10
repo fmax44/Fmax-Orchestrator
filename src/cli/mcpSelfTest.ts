@@ -20,12 +20,13 @@ interface SelfTestResult {
   }>;
   tempProjectPath: string;
   inspectedProjectPath?: string;
+  inspectedTaskId?: string;
 }
 
 const args = parseArgs(process.argv.slice(2));
 
 try {
-  const result = await runSelfTest(args.project);
+  const result = await runSelfTest(args.project, args.task);
   const hasFailures = result.checks.some((check) => check.status === "fail");
 
   if (args.format === "json") {
@@ -43,7 +44,7 @@ try {
   process.exitCode = 1;
 }
 
-async function runSelfTest(inspectedProjectPath?: string): Promise<SelfTestResult> {
+async function runSelfTest(inspectedProjectPath?: string, inspectedTaskId?: string): Promise<SelfTestResult> {
   const serverCommand = await resolveServerCommand();
   const projectPath = await readyProject();
   const client = new Client({
@@ -118,6 +119,73 @@ async function runSelfTest(inspectedProjectPath?: string): Promise<SelfTestResul
             )
           : fail("project_status requested project", JSON.stringify(requestedProjectStatus))
       );
+
+      const doctor = await callToolJson<{
+        result: string;
+        orchestrator: { checks: unknown[] };
+        targetProject?: { checks: unknown[] };
+      }>(client, "doctor", {
+        projectPath: inspectedProjectPath,
+        format: "json"
+      });
+      checks.push(
+        typeof doctor.result === "string" &&
+            Array.isArray(doctor.orchestrator.checks) &&
+            Array.isArray(doctor.targetProject?.checks)
+          ? pass("doctor requested project", `Result: ${doctor.result}.`)
+          : fail("doctor requested project", JSON.stringify(doctor))
+      );
+
+      const runTests = await callToolJson<{
+        results: Array<{ command: string; exitCode: number; timedOut: boolean }>;
+      }>(client, "run_tests", {
+        projectPath: inspectedProjectPath,
+        commands: ["git status --short"],
+        timeoutMs: 30_000
+      });
+      checks.push(
+        runTests.results.length === 1 && !runTests.results[0].timedOut
+          ? pass("run_tests requested project", `Exit code: ${runTests.results[0].exitCode}.`)
+          : fail("run_tests requested project", JSON.stringify(runTests))
+      );
+
+      const requestedRelayStatus = await callToolJson<{
+        waitingFor: string;
+        nextActor: string;
+        recommendedAction: string;
+      }>(client, "relay_status", {
+        projectPath: inspectedProjectPath,
+        includeDoctor: false,
+        includeReview: true,
+        taskId: inspectedTaskId
+      });
+      checks.push(
+        requestedRelayStatus.waitingFor.length > 0 && requestedRelayStatus.nextActor.length > 0
+          ? pass("relay_status requested project", `${requestedRelayStatus.recommendedAction}, waitingFor=${requestedRelayStatus.waitingFor}.`)
+          : fail("relay_status requested project", JSON.stringify(requestedRelayStatus))
+      );
+
+      if (inspectedTaskId) {
+        const reviewGate = await callToolJson<{
+          taskId: string;
+          decision: string;
+          checks: unknown[];
+          errors: string[];
+        }>(client, "review_gate", {
+          projectPath: inspectedProjectPath,
+          taskId: inspectedTaskId,
+          checks: ["git status --short"],
+          requireReport: true,
+          requireCleanForbiddenPaths: true,
+          writeReport: false,
+          format: "json"
+        });
+        checks.push(
+          reviewGate.taskId === inspectedTaskId && typeof reviewGate.decision === "string" && Array.isArray(reviewGate.checks)
+            ? pass("review_gate requested project", `Decision: ${reviewGate.decision}; errors=${reviewGate.errors.length}.`)
+            : fail("review_gate requested project", JSON.stringify(reviewGate))
+        );
+      }
     }
 
     const createTask = await callToolJson<{ taskId: string; status: string }>(client, "create_task", {
@@ -178,7 +246,8 @@ async function runSelfTest(inspectedProjectPath?: string): Promise<SelfTestResul
       tools,
       checks,
       tempProjectPath: projectPath,
-      inspectedProjectPath
+      inspectedProjectPath,
+      inspectedTaskId
     };
   } finally {
     await transport.close().catch(() => undefined);
@@ -222,7 +291,11 @@ async function callToolJson<T>(client: Client, name: string, args: Record<string
       name,
       arguments: args
     },
-    CallToolResultSchema
+    CallToolResultSchema,
+    {
+      timeout: 180_000,
+      resetTimeoutOnProgress: true
+    }
   ) as CallToolResult;
 
   const text = result.content.find((item) => item.type === "text");
@@ -253,6 +326,7 @@ function formatSelfTestText(result: SelfTestResult): string {
     `Server command: ${result.serverCommand.command} ${result.serverCommand.args.join(" ")}`,
     `Temporary project: ${result.tempProjectPath}`,
     ...(result.inspectedProjectPath ? [`Requested project: ${result.inspectedProjectPath}`] : []),
+    ...(result.inspectedTaskId ? [`Requested task: ${result.inspectedTaskId}`] : []),
     "",
     "Checks:"
   ];
@@ -262,10 +336,11 @@ function formatSelfTestText(result: SelfTestResult): string {
   return lines.join("\n");
 }
 
-function parseArgs(argv: string[]): { format: "text" | "json"; project?: string } {
+function parseArgs(argv: string[]): { format: "text" | "json"; project?: string; task?: string } {
   return {
     format: readValue(argv, "--format") === "json" ? "json" : "text",
-    project: readValue(argv, "--project") ?? readValue(argv, "-p")
+    project: readValue(argv, "--project") ?? readValue(argv, "-p"),
+    task: readValue(argv, "--task")
   };
 }
 

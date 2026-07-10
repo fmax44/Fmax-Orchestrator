@@ -75,8 +75,11 @@ export async function loadDashboardConfig(orchestratorRoot: string): Promise<Das
   const localConfigExists = await fileExists(localConfigPath);
   const localConfig = localConfigExists ? await readJson<Partial<DashboardConfig>>(localConfigPath) : undefined;
 
+  const config = mergeDashboardConfig(defaults, localConfig);
+  config.commands.mcpServer = normalizeMcpServerCommand(config.commands.mcpServer, root);
+
   return {
-    config: mergeDashboardConfig(defaults, localConfig),
+    config,
     exampleConfigPath,
     localConfigPath,
     localConfigExists
@@ -100,8 +103,8 @@ export function createDefaultDashboardConfig(orchestratorRoot: string): Dashboar
     commands: {
       mcpServer: {
         label: "Start MCP server",
-        command: npmCommand,
-        args: ["run", "dev"],
+        command: process.execPath,
+        args: [path.join(root, "dist", "index.js")],
         cwd: root
       },
       codexWorker: {
@@ -138,6 +141,24 @@ export function createDefaultDashboardConfig(orchestratorRoot: string): Dashboar
         path: "D:/projects/orchestrator-product-trial"
       }
     ]
+  };
+}
+
+function normalizeMcpServerCommand(command: DashboardCommandConfig | undefined, root: string): DashboardCommandConfig | undefined {
+  if (!command || !/^(?:npm|npm\.cmd)$/i.test(path.basename(command.command))) {
+    return command;
+  }
+
+  const args = command.args ?? [];
+  if (args[0] !== "run" || !["dev", "start"].includes(args[1] ?? "")) {
+    return command;
+  }
+
+  return {
+    ...command,
+    command: process.execPath,
+    args: [path.join(root, "dist", "index.js")],
+    cwd: command.cwd ?? root
   };
 }
 

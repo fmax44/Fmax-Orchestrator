@@ -13,8 +13,8 @@
   "commands": {
     "mcpServer": {
       "label": "Start MCP server",
-      "command": "npm.cmd",
-      "args": ["run", "dev"],
+      "command": "node",
+      "args": ["D:/projects/chatgpt-codex-mcp/dist/index.js"],
       "cwd": "D:/projects/chatgpt-codex-mcp"
     },
     "codexWorker": {

@@ -71,7 +71,7 @@ describe("dashboard CLI server", () => {
     });
     expect(startMcp.status).toBe(303);
     expect(startMcp.headers.get("location")).toContain("/?ok=");
-    expect(startedCommands[0]).toContain("npm");
+    expect(startedCommands[0]).toBe(`${process.execPath} ${path.join(path.resolve("D:/projects/chatgpt-codex-mcp"), "dist", "index.js")}`);
 
     const openChatgpt = await fetch(`${baseUrl}/action/open-chatgpt`, {
       method: "POST",
@@ -179,7 +179,7 @@ describe("dashboard CLI server", () => {
     ]);
     expect(startedCommands).toEqual([
       "tunnel.cmd start",
-      "npm.cmd run dev",
+      `${process.execPath} ${path.join(path.dirname(loadedConfig.localConfigPath), "..", "dist", "index.js")}`,
       "npm.cmd run codex:worker"
     ]);
   });

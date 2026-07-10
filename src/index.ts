@@ -1,4 +1,7 @@
 import { createServer } from "./mcp/server.js";
+import { installStdioConsoleGuard } from "./mcp/stdioSafety.js";
+
+installStdioConsoleGuard();
 
 async function main(): Promise<void> {
   const server = createServer();

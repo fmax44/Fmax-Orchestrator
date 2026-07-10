@@ -25,6 +25,7 @@ export interface ReviewGateOptions {
   requireReport?: boolean;
   requireCleanForbiddenPaths?: boolean;
   writeReport?: boolean;
+  cancelSignal?: AbortSignal;
 }
 
 export interface ReviewGateResult {
@@ -126,14 +127,18 @@ export class ReviewGateService {
       checks.push(warn("required_checks", "No checks were provided."));
       warnings.push("No checks were provided.");
     } else {
-      const run = await this.testRunner.run(root, requestedChecks).catch((error: unknown) => {
+      const run = await this.testRunner.run(root, requestedChecks, { cancelSignal: options.cancelSignal }).catch((error: unknown) => {
         errors.push(error instanceof Error ? error.message : String(error));
         return undefined;
       });
 
       if (run) {
         for (const result of run.results) {
-          if (result.exitCode === 0) {
+          if (result.timedOut) {
+            const details = result.stderr || result.stdout || `Command timed out after ${result.durationMs} ms.`;
+            checks.push(fail(`check: ${result.command}`, details));
+            errors.push(`Required check timed out: ${result.command}`);
+          } else if (result.exitCode === 0) {
             checks.push(pass(`check: ${result.command}`, "exit code 0"));
           } else {
             checks.push(fail(`check: ${result.command}`, result.stderr || result.stdout || `exit code ${result.exitCode}`));

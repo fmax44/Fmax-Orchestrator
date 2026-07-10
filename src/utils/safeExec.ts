@@ -15,6 +15,7 @@ export interface SafeExecOptions {
   timeoutMs?: number;
   maxOutputBytes?: number;
   allowNetworkDownload?: boolean;
+  cancelSignal?: AbortSignal;
 }
 
 const defaultTimeoutMs = 120_000;
@@ -36,40 +37,56 @@ export async function safeExec(
   const cwd = await resolveProjectPath(projectPath);
   validateCommand(command, options);
   const startedAt = Date.now();
+  const timeoutMs = options.timeoutMs ?? defaultTimeoutMs;
+  const timeoutController = new AbortController();
+  let timeoutTriggered = false;
+  const timeout = setTimeout(() => {
+    timeoutTriggered = true;
+    timeoutController.abort();
+  }, timeoutMs);
+  timeout.unref();
+  const cancelSignal = options.cancelSignal
+    ? AbortSignal.any([options.cancelSignal, timeoutController.signal])
+    : timeoutController.signal;
 
   try {
     const result = await execaCommand(command, {
       cwd,
       shell: true,
-      timeout: options.timeoutMs ?? defaultTimeoutMs,
+      timeout: timeoutMs,
       maxBuffer: Math.max(options.maxOutputBytes ?? defaultMaxOutputBytes, defaultMaxOutputBytes) * 4,
       reject: false,
+      cancelSignal,
       env: {
         ...process.env,
         NO_COLOR: "1"
       }
     });
+    const timedOut = timeoutTriggered || result.timedOut;
 
     return buildCommandResult({
       command,
-      exitCode: result.exitCode ?? 0,
+      exitCode: timedOut ? 124 : result.exitCode ?? 0,
       stdout: result.stdout,
-      stderr: result.stderr,
-      timedOut: false,
+      stderr: timedOut ? timeoutStderr(result.stderr, result.stdout, timeoutMs) : result.stderr,
+      timedOut,
       durationMs: Date.now() - startedAt,
       maxOutputBytes: options.maxOutputBytes
     });
   } catch (error: unknown) {
     const execaError = error as ExecaError;
+    const timedOut = timeoutTriggered || isTimeoutError(error);
     return buildCommandResult({
       command,
-      exitCode: typeof execaError.exitCode === "number" ? execaError.exitCode : 1,
+      exitCode: timedOut ? 124 : typeof execaError.exitCode === "number" ? execaError.exitCode : 1,
       stdout: String(execaError.stdout ?? ""),
-      stderr: buildErrorStderr(execaError, options.timeoutMs ?? defaultTimeoutMs),
-      timedOut: Boolean(execaError.timedOut),
+      stderr: buildErrorStderr(execaError, timeoutMs, timedOut),
+      timedOut,
       durationMs: Date.now() - startedAt,
       maxOutputBytes: options.maxOutputBytes
     });
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -129,13 +146,37 @@ function buildCommandResult(input: {
   };
 }
 
-function buildErrorStderr(error: ExecaError, timeoutMs: number): string {
-  if (error.timedOut) {
-    const details = String(error.stderr ?? error.stdout ?? "").trim();
-    return details
-      ? `Command timed out after ${timeoutMs} ms.\n${details}`
-      : `Command timed out after ${timeoutMs} ms.`;
+function buildErrorStderr(error: ExecaError, timeoutMs: number, timedOut = isTimeoutError(error)): string {
+  if (timedOut) {
+    return timeoutStderr(error.stderr, error.stdout, timeoutMs);
   }
 
   return String(error.stderr ?? error.message ?? error);
+}
+
+function timeoutStderr(stderr: unknown, stdout: unknown, timeoutMs: number): string {
+  const details = String(stderr || stdout || "").trim();
+  return details
+    ? `Command timed out after ${timeoutMs} ms.\n${details}`
+    : `Command timed out after ${timeoutMs} ms.`;
+}
+
+function isTimeoutError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const candidate = error as {
+    timedOut?: unknown;
+    name?: unknown;
+    code?: unknown;
+    cause?: unknown;
+  };
+
+  return (
+    candidate.timedOut === true ||
+    candidate.name === "TimeoutError" ||
+    candidate.code === "ETIMEDOUT" ||
+    (candidate.cause !== error && isTimeoutError(candidate.cause))
+  );
 }

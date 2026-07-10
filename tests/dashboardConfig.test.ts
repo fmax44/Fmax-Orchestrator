@@ -11,9 +11,34 @@ describe("dashboardConfig", () => {
     expect(config.dashboardPort).toBe(47821);
     expect(config.managedProjects.length).toBeGreaterThanOrEqual(2);
     expect(config.commands.mcpServer?.label).toBe("Start MCP server");
+    expect(config.commands.mcpServer?.command).toBe(process.execPath);
+    expect(config.commands.mcpServer?.args).toEqual([path.resolve("D:/projects/chatgpt-codex-mcp", "dist", "index.js")]);
     expect(config.publicIpGeoLookupUrlTemplate).toContain("{ip}");
     expect(config.worker.directExecution.enabled).toBe(false);
     expect(config.worker.directExecution.sandbox).toBe("read-only");
+  });
+
+  it("normalizes npm wrappers that can pollute MCP stdout", async () => {
+    const root = path.join(os.tmpdir(), `dashboard-config-${crypto.randomUUID()}`);
+    await mkdir(path.join(root, "scripts"), { recursive: true });
+    await writeFile(path.join(root, "scripts", "fmax-orchestrator.config.local.json"), JSON.stringify({
+      commands: {
+        mcpServer: {
+          label: "Start MCP server",
+          command: "npm.cmd",
+          args: ["run", "dev"],
+          cwd: root
+        }
+      }
+    }), "utf8");
+
+    const loaded = await loadDashboardConfig(root);
+
+    expect(loaded.config.commands.mcpServer).toMatchObject({
+      command: process.execPath,
+      args: [path.join(root, "dist", "index.js")],
+      cwd: root
+    });
   });
 
   it("merges a local override config", async () => {

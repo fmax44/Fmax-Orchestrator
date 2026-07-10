@@ -52,11 +52,12 @@ export interface ToolHandlers {
     requireCleanForbiddenPaths?: boolean;
     writeReport?: boolean;
     format?: "json" | "text";
+    cancelSignal?: AbortSignal;
   }): Promise<unknown>;
   getTaskStatus(input: { projectPath: string; taskId?: string }): Promise<unknown>;
   readReport(input: { projectPath: string; taskId: string }): Promise<unknown>;
   inspectDiff(input: { projectPath: string; mode?: DiffMode }): Promise<unknown>;
-  runTests(input: { projectPath: string; commands: string[]; timeoutMs?: number }): Promise<unknown>;
+  runTests(input: { projectPath: string; commands: string[]; timeoutMs?: number; cancelSignal?: AbortSignal }): Promise<unknown>;
   approveTask(input: {
     projectPath: string;
     taskId: string;
@@ -168,7 +169,7 @@ export function createToolHandlers(
     },
     async runTests(input) {
       await logOperation(architectLog, input.projectPath, "run-tests", undefined, `Run checks:\n${input.commands.map((command) => `- ${command}`).join("\n")}`);
-      return testRunner.run(input.projectPath, input.commands, { timeoutMs: input.timeoutMs });
+      return testRunner.run(input.projectPath, input.commands, { timeoutMs: input.timeoutMs, cancelSignal: input.cancelSignal });
     },
     async approveTask(input) {
       return approvalService.approve(input);
@@ -346,7 +347,7 @@ export function registerTools(server: McpServer, handlers = createToolHandlers()
         format: z.enum(["json", "text"]).default("json")
       }
     },
-    async (args) => toolResult(() => handlers.reviewGate(args))
+    async (args, extra) => toolResult(() => handlers.reviewGate({ ...args, cancelSignal: extra?.signal }))
   );
 
   server.registerTool(
@@ -436,7 +437,7 @@ export function registerTools(server: McpServer, handlers = createToolHandlers()
         timeoutMs: z.number().int().positive().optional()
       }
     },
-    async (args) => toolResult(() => handlers.runTests(args))
+    async (args, extra) => toolResult(() => handlers.runTests({ ...args, cancelSignal: extra?.signal }))
   );
 
   server.registerTool(
@@ -654,7 +655,7 @@ function jsonResult(value: unknown) {
     content: [
       {
         type: "text" as const,
-        text: JSON.stringify(value, null, 2)
+        text: serializeToolPayload(value)
       }
     ]
   };
@@ -664,20 +665,24 @@ async function toolResult(action: () => Promise<unknown>) {
   try {
     return jsonResult(await action());
   } catch (error: unknown) {
-    return jsonResult({
-      ok: false,
-      error: normalizeToolError(error)
-    });
+    return {
+      ...jsonResult({
+        ok: false,
+        error: normalizeToolError(error)
+      }),
+      isError: true
+    };
   }
 }
 
 function normalizeToolError(error: unknown): { message: string; code?: string; retryable: boolean } {
   if (error instanceof Error) {
     const nodeError = error as NodeJS.ErrnoException;
+    const timeout = error.name === "TimeoutError" || nodeError.code === "ETIMEDOUT";
     return {
       message: error.message,
-      code: typeof nodeError.code === "string" ? nodeError.code : undefined,
-      retryable: nodeError.code === "EPERM" || nodeError.code === "EBUSY" || nodeError.code === "ETIMEDOUT"
+      code: typeof nodeError.code === "string" ? nodeError.code : timeout ? "ETIMEDOUT" : undefined,
+      retryable: timeout || nodeError.code === "EPERM" || nodeError.code === "EBUSY"
     };
   }
 
@@ -685,6 +690,33 @@ function normalizeToolError(error: unknown): { message: string; code?: string; r
     message: String(error),
     retryable: false
   };
+}
+
+function serializeToolPayload(value: unknown): string {
+  try {
+    const serialized = JSON.stringify(value, null, 2);
+    if (serialized !== undefined) {
+      return serialized;
+    }
+  } catch (error: unknown) {
+    return JSON.stringify({
+      ok: false,
+      error: {
+        message: `MCP tool response could not be serialized: ${error instanceof Error ? error.message : String(error)}`,
+        code: "MCP_RESPONSE_SERIALIZATION",
+        retryable: false
+      }
+    }, null, 2);
+  }
+
+  return JSON.stringify({
+    ok: false,
+    error: {
+      message: "MCP tool response was undefined.",
+      code: "MCP_RESPONSE_UNDEFINED",
+      retryable: false
+    }
+  }, null, 2);
 }
 
 async function startDetachedCommand(command: DashboardCommandConfig, extraArgs: string[] = []): Promise<void> {

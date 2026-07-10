@@ -202,6 +202,72 @@ describe("MCP tool registry", () => {
     });
     expect(payload.errors).toContain("Required check failed: node -e \"process.exit(1)\"");
   }, 15000);
+
+  it("returns structured run_tests payloads for success, failure, timeout, and long output", async () => {
+    const handlers = createToolHandlers();
+    const registeredTools: Array<{
+      name: string;
+      callback: (args: Record<string, unknown>) => Promise<{ content: Array<{ text: string }>; isError?: boolean }>;
+    }> = [];
+    const server = {
+      registerTool(name: string, _config: unknown, callback: (args: Record<string, unknown>) => Promise<{ content: Array<{ text: string }>; isError?: boolean }>) {
+        registeredTools.push({ name, callback });
+      }
+    };
+    registerTools(server as never, handlers);
+    const tool = registeredTools.find((entry) => entry.name === "run_tests");
+
+    expect(tool).toBeDefined();
+
+    const result = await tool.callback({
+      projectPath: process.cwd(),
+      commands: [
+        'node -e "console.log(\'short-ok\')"',
+        "cmd /d /c exit 3",
+        "ping 127.0.0.1 -n 3",
+        'node -e "process.stdout.write(\'x\'.repeat(90000))"'
+      ],
+      timeoutMs: 500
+    });
+    const payload = JSON.parse(result.content[0].text) as {
+      results: Array<{ exitCode: number; timedOut: boolean; truncated: boolean; stdout: string }>;
+    };
+
+    expect(result.isError).not.toBe(true);
+    expect(payload.results).toHaveLength(4);
+    expect(payload.results[0]).toMatchObject({ exitCode: 0, timedOut: false });
+    expect(payload.results[1]).toMatchObject({ exitCode: 3, timedOut: false });
+    expect(payload.results[2]).toMatchObject({ exitCode: 124, timedOut: true });
+    expect(payload.results[3].truncated).toBe(true);
+    expect(payload.results[3].stdout).toContain("[output truncated at 80000 bytes]");
+  }, 15000);
+
+  it("normalizes a TimeoutError thrown by a tool handler", async () => {
+    const timeoutError = new Error("request exceeded its deadline");
+    timeoutError.name = "TimeoutError";
+    const handlers = {
+      ...createToolHandlers(),
+      runTests: async () => {
+        throw timeoutError;
+      }
+    };
+    const registeredTools: Array<{
+      name: string;
+      callback: (args: Record<string, unknown>) => Promise<{ content: Array<{ text: string }>; isError?: boolean }>;
+    }> = [];
+    const server = {
+      registerTool(name: string, _config: unknown, callback: (args: Record<string, unknown>) => Promise<{ content: Array<{ text: string }>; isError?: boolean }>) {
+        registeredTools.push({ name, callback });
+      }
+    };
+    registerTools(server as never, handlers);
+    const tool = registeredTools.find((entry) => entry.name === "run_tests");
+    const result = await tool.callback({ projectPath: process.cwd(), commands: ["npm test"] });
+    const payload = JSON.parse(result.content[0].text) as { ok: boolean; error: { code: string; retryable: boolean } };
+
+    expect(result.isError).toBe(true);
+    expect(payload).toMatchObject({ ok: false, error: { code: "ETIMEDOUT", retryable: true } });
+  });
 });
 
 async function tempProject(): Promise<string> {

@@ -40,6 +40,18 @@ Direct control в контексте Fmax-Orchestrator означает, что 
 node dist/index.js
 ```
 
+Для конфигурации MCP-клиента используйте именно прямой запуск `node dist/index.js`.
+Не используйте `npm run dev` или `npm start` как stdio launcher: npm/tsx могут
+напечатать служебный текст в stdout до ответа `initialize`, из-за чего клиент
+увидит `invalid MCP initialize response`. В runtime stdout зарезервирован для
+MCP JSON-RPC, а обычные console-сообщения перенаправляются в stderr.
+
+Долгие проверки должны задавать достаточный `timeoutMs`. Если deadline команды
+истёк, `run_tests` возвращает structured result с `timedOut: true` и exit code
+`124`; `review_gate` преобразует это в structured `BLOCKED`, не обрывая MCP
+transport. При отмене запроса клиентом сигнал передаётся subprocess, чтобы он не
+оставался висеть.
+
 ## Какой transport используется сейчас
 
 Сейчас сервер работает через `StdioServerTransport`.

@@ -237,6 +237,41 @@ describe("ReviewGateService", () => {
       "npm --prefix frontend run build"
     ]);
   }, 15000);
+
+  it("returns a structured BLOCKED result when a required check times out", async () => {
+    const projectPath = await readyProject("node");
+    const taskId = await docsTaskWithReport(projectPath);
+    const testRunner = {
+      async run(_projectPath: string, commands: string[]) {
+        return {
+          results: commands.map((command) => ({
+            command,
+            exitCode: 124,
+            stdout: "partial output",
+            stderr: "Command timed out after 50 ms.",
+            durationMs: 51,
+            timedOut: true,
+            truncated: false
+          }))
+        };
+      }
+    };
+
+    const result = await new ReviewGateService(
+      new TaskStore(),
+      new ProjectPolicyService(),
+      new DoctorService(),
+      testRunner as never
+    ).run({
+      projectPath,
+      taskId,
+      checks: ["node -e \"setTimeout(() => {}, 1000)\""]
+    });
+
+    expect(result.decision).toBe("BLOCKED");
+    expect(result.errors).toContain('Required check timed out: node -e "setTimeout(() => {}, 1000)"');
+    expect(JSON.parse(JSON.stringify(result))).toMatchObject({ taskId, decision: "BLOCKED" });
+  }, 15000);
 });
 
 describe("approve_task Review Gate integration", () => {
